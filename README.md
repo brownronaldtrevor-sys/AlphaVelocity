@@ -35,3 +35,10 @@ measure calibration—not to imply proven profitability.
 
 Paper only. Long common stocks only. Explicit human approval. Hard independent controls.
 No automatic live transition.
+
+## Milestone 2 — Validated Price Action Evidence
+
+Price structure, support/resistance location, failures, gaps, compression/expansion,
+relative volume, and accumulation/distribution features are now recorded in research reports.
+They default to **zero blending weight** and cannot affect rankings unless the out-of-sample
+validation pipeline writes an approved artifact. See `PRICE_ACTION_VALIDATION_STANDARD.md`.

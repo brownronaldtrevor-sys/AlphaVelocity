@@ -11,6 +11,9 @@ from alpha_velocity.broker.ibkr import IBKRApp
 from alpha_velocity.shadow.cio import ShadowCIO
 from alpha_velocity.shadow.models import DecisionCandidate
 from alpha_velocity.signals.technical import compute_snapshot
+from alpha_velocity.price_action.features import compute_price_action_snapshot
+from alpha_velocity.price_action.integration import blend_price_action_evidence
+from alpha_velocity.price_action.validation import load_approved_weight
 
 
 def _candidate(symbol: str, snapshot) -> DecisionCandidate:
@@ -51,6 +54,7 @@ def run_research_report(
     output_folder: str,
 ) -> dict:
     snapshots = {}
+    price_action_snapshots = {}
     failures = {}
     req_id = 12000
 
@@ -60,15 +64,27 @@ def run_research_report(
             contract = to_ib_contract(Instrument(symbol=symbol, asset_class=AssetClass.STOCK))
             bars = app.request_daily_bars(req_id, contract)
             snapshots[symbol] = compute_snapshot(bars)
+            price_action_snapshots[symbol] = compute_price_action_snapshot(bars)
         except Exception as exc:  # each symbol fails independently
             failures[symbol] = f"{type(exc).__name__}: {exc}"
 
     candidates = [_candidate(symbol, snap) for symbol, snap in snapshots.items()]
     shadow_verdicts = ShadowCIO().review(candidates) if len(candidates) >= 1 else []
 
+    approved_price_action_weight = load_approved_weight(
+        "validation_artifacts/price_action_v1.json"
+    )
+    blended = {
+        symbol: blend_price_action_evidence(
+            snapshot.composite_score,
+            price_action_snapshots[symbol].evidence_score,
+            approved_price_action_weight,
+        )
+        for symbol, snapshot in snapshots.items()
+    }
     ranked = sorted(
         snapshots.items(),
-        key=lambda item: item[1].composite_score,
+        key=lambda item: blended[item[0]].blended_score,
         reverse=True,
     )
     report = {
@@ -84,6 +100,25 @@ def run_research_report(
                 "symbol": symbol,
                 "state": snap.state,
                 "technical_composite": snap.composite_score,
+                "price_action_evidence": price_action_snapshots[symbol].evidence_score,
+                "price_action_weight": blended[symbol].price_action_weight,
+                "blended_research_score": blended[symbol].blended_score,
+                "price_action": {
+                    "close_location_1d": price_action_snapshots[symbol].close_location_1d,
+                    "range_position_20d": price_action_snapshots[symbol].range_position_20d,
+                    "range_position_60d": price_action_snapshots[symbol].range_position_60d,
+                    "trend_structure": price_action_snapshots[symbol].trend_structure,
+                    "compression_ratio": price_action_snapshots[symbol].compression_ratio,
+                    "expansion_ratio": price_action_snapshots[symbol].expansion_ratio,
+                    "gap_pct": price_action_snapshots[symbol].gap_pct,
+                    "failed_breakout": price_action_snapshots[symbol].failed_breakout,
+                    "failed_breakdown": price_action_snapshots[symbol].failed_breakdown,
+                    "support_distance_60d": price_action_snapshots[symbol].support_distance_60d,
+                    "resistance_distance_60d": price_action_snapshots[symbol].resistance_distance_60d,
+                    "accumulation_score": price_action_snapshots[symbol].accumulation_score,
+                    "distribution_score": price_action_snapshots[symbol].distribution_score,
+                    "invalidation_price": price_action_snapshots[symbol].invalidation_price,
+                },
                 "trend_score": snap.trend_score,
                 "breakout_score": snap.breakout_score,
                 "volume_score": snap.volume_score,
@@ -98,7 +133,8 @@ def run_research_report(
         ],
         "shadow_review": [asdict(v) for v in shadow_verdicts],
         "critical_disclaimer": (
-            "The technical scores are transparent heuristics, not calibrated forecasts. "
+            "Technical and price-action evidence are transparent research features, not calibrated forecasts. "
+            "Price action receives zero portfolio weight unless an out-of-sample validation artifact approves it. "
             "This report generates research observations only and has no order path."
         ),
     }
