@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpha-velocity"
+version = "0.8.2"
+description = "Institutional-audit, event-driven research and paper-trading foundation"
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0",
+  "pydantic>=2.7"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10"]
+
+[tool.setuptools.packages.find]
+include = ["alpha_velocity*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

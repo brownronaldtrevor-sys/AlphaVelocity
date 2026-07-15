@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.vscode/
+.env
+config.yaml
+config.paper.yaml
+audit/
+logs/
+data/
+state/
+research_reports/
+paper_reports/
+paper_plans/
+learning_journal/
+paper_state/
+*.log
+# GitHub / local machine
+.DS_Store
+Thumbs.db
+*.bundle
+*.zip
+setup_windows.log

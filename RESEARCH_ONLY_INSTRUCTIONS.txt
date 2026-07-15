@@ -1,0 +1,11 @@
+ALPHA VELOCITY RESEARCH-ONLY RUN
+
+1. Keep Trader Workstation open and logged into Simulated Trading.
+2. Keep config.yaml set to mode: PAPER and dry_run: true.
+3. Double-click RUN_RESEARCH_ONLY.bat.
+4. Wait. IBKR requests are intentionally serialized; five symbols may take time.
+5. The command prints a report and saves JSON under research_reports.
+6. No strategy order is submitted. This launcher never calls place_bracket.
+
+The included technical scores are hypotheses, not proven edge. They are for observing
+market-data flow and report behavior before model training or paper orders.

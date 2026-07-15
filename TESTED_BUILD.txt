@@ -1,0 +1,9 @@
+Clean-room package verification completed.
+
+Result: 26 tests passed.
+Python package installed successfully from repository root.
+All Python modules compiled successfully.
+
+Expected diagnostic limitations in the build environment:
+- Official IBKR ibapi is installed by the user's official TWS API package.
+- TWS socket is available only on the user's computer while TWS is open.

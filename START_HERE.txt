@@ -1,0 +1,18 @@
+ALPHA VELOCITY - START HERE
+
+This is the persistent installation.
+
+FIRST TIME ONLY
+1. Extract the AlphaVelocity folder to a local location such as C:\AlphaVelocity.
+2. Double-click INSTALL_OR_REPAIR.bat.
+3. Open Trader Workstation and log into Simulated Trading.
+4. Enable API socket clients and confirm paper port 7497.
+5. Double-click DIAGNOSE_TWS.bat.
+6. Double-click CONNECT_TWS_SAFE.bat.
+7. Double-click RUN_RESEARCH_ONLY.bat.
+
+IMPORTANT
+- Never delete the .venv folder after installation.
+- Future updates will be applied inside this same folder.
+- Keep broker mode PAPER and dry_run true.
+- Research-only mode has no order-submission call.
