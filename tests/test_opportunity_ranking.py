@@ -665,3 +665,99 @@ def test_multiple_opportunities_comparison(
     assert batch.ranked_opportunities[0].opportunity_id == opp_strong.opportunity_id
     assert batch.ranked_opportunities[0].expected_swing_value_score > batch.ranked_opportunities[1].expected_swing_value_score
     assert batch.total_opportunities == 2
+
+
+def test_shadow_signals_attached_without_influence_by_default(
+    bullish_daily_bars: list[Bar],
+    bullish_weekly_bars: list[Bar],
+    benchmark_bars: list[Bar],
+    sector_bars: list[Bar],
+    observation_time: datetime,
+):
+    """Shadow signals are captured while influence remains disabled by default."""
+    opp = create_opportunity(
+        symbol="SHADOW",
+        daily_bars=bullish_daily_bars,
+        weekly_bars=bullish_weekly_bars,
+        benchmark_bars=benchmark_bars,
+        sector_bars=sector_bars,
+        observation_time=observation_time,
+        expected_upside_pct=30.0,
+        expected_downside_pct=-10.0,
+        expected_holding_days=10.0,
+        probability_estimate=0.60,
+    )
+
+    ranker = OpportunityRanker()
+    batch = ranker.rank(
+        [opp],
+        shadow_signals_by_opportunity={
+            opp.opportunity_id: {
+                "long_term_asymmetric_value": 92.0,
+                "inflection_synchronization": 88.0,
+            }
+        },
+    )
+
+    result = batch.ranked_opportunities[0]
+    assert result.shadow_signals
+    assert result.shadow_score > 0.0
+    assert result.shadow_influence_enabled is False
+    assert result.evidence_lineage["shadow"]["influence_enabled"] is False
+    assert result.evidence_lineage["shadow"]["weight"] == 0.0
+
+
+def test_shadow_influence_can_be_explicitly_enabled(
+    bullish_daily_bars: list[Bar],
+    bullish_weekly_bars: list[Bar],
+    benchmark_bars: list[Bar],
+    sector_bars: list[Bar],
+    observation_time: datetime,
+):
+    """Shadow influence can alter ordering only when explicitly enabled."""
+    higher_base = create_opportunity(
+        symbol="BASEHIGH",
+        daily_bars=bullish_daily_bars,
+        weekly_bars=bullish_weekly_bars,
+        benchmark_bars=benchmark_bars,
+        sector_bars=sector_bars,
+        observation_time=observation_time,
+        expected_upside_pct=40.0,
+        expected_downside_pct=-8.0,
+        expected_holding_days=10.0,
+        probability_estimate=0.70,
+    )
+    lower_base = create_opportunity(
+        symbol="BASELOW",
+        daily_bars=bullish_daily_bars,
+        weekly_bars=bullish_weekly_bars,
+        benchmark_bars=benchmark_bars,
+        sector_bars=sector_bars,
+        observation_time=observation_time,
+        expected_upside_pct=20.0,
+        expected_downside_pct=-15.0,
+        expected_holding_days=10.0,
+        probability_estimate=0.55,
+    )
+
+    ranker = OpportunityRanker()
+    without_influence = ranker.rank(
+        [higher_base, lower_base],
+        shadow_signals_by_opportunity={
+            higher_base.opportunity_id: {"shadow": 10.0},
+            lower_base.opportunity_id: {"shadow": 100.0},
+        },
+    )
+    with_influence = ranker.rank(
+        [higher_base, lower_base],
+        shadow_signals_by_opportunity={
+            higher_base.opportunity_id: {"shadow": 10.0},
+            lower_base.opportunity_id: {"shadow": 100.0},
+        },
+        ranking_shadow_influence_enabled=True,
+        ranking_shadow_weight=0.95,
+    )
+
+    assert without_influence.ranked_opportunities[0].opportunity_id == higher_base.opportunity_id
+    assert with_influence.ranked_opportunities[0].opportunity_id == lower_base.opportunity_id
+    assert with_influence.ranked_opportunities[0].shadow_influence_enabled is True

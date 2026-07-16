@@ -58,6 +58,11 @@ class RankingResult:
     
     # Evidence lineage
     evidence_lineage: dict[str, Any] = field(default_factory=dict)
+
+    # Shadow ranking integration (default non-influential)
+    shadow_signals: dict[str, float] = field(default_factory=dict)
+    shadow_score: float = 0.0
+    shadow_influence_enabled: bool = False
     
     # Schema version
     schema_version: str = "1.0.0"
@@ -75,6 +80,8 @@ class RankingResult:
             raise ValueError(f"overall_research_score must be 0-100, got {self.overall_research_score}")
         if not (0 <= self.percentile <= 100):
             raise ValueError(f"percentile must be 0-100, got {self.percentile}")
+        if not (0 <= self.shadow_score <= 100):
+            raise ValueError(f"shadow_score must be 0-100, got {self.shadow_score}")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

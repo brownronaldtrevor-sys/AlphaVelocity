@@ -258,6 +258,29 @@ This framework prevents:
 
 ---
 
+## DISCOVERY + INFLECTION INTELLIGENCE (v1)
+
+Alpha Velocity evaluates opportunities on four independent horizons:
+- Research horizon
+- Primary repricing horizon
+- Tactical swing horizon
+- Execution horizon
+
+Inflection is treated as a multi-dimensional process, not a single score. We track whether each dimension is before, within, or after transition and whether dimensions are synchronized or contradictory.
+
+Required interpretive rules:
+- Synchronization strength can improve confidence but does not bypass risk or governance.
+- Recognition gap can indicate timing opportunity but does not override invalidation discipline.
+- Momentum and pattern quality are evidence inputs, not stand-alone allocation authority.
+- Future outlook statements must separate facts, guidance, estimates, and inference.
+- Unknowns must be explicit rather than silently assumed favorable.
+
+Ranking integration boundary:
+- Discovery intelligence may be passed as shadow signals.
+- Shadow influence remains disabled by default and must be explicitly enabled.
+
+---
+
 ## CAPITAL ALLOCATION MODEL
 
 ### Cash Competes
