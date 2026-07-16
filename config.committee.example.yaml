@@ -1,0 +1,124 @@
+{
+  "warehouse_manifest_hash": "warehouse_v1_20260116_abc123def456",
+  "dataset_manifest_hash": "dataset_v1_20260116_xyz789uvw012",
+  "paper_account_identifier": "DU000000",
+  "committee": {
+    "current_cash": 50000.0,
+    "current_equity": 100000.0,
+    "universe_config": {
+      "sectors": [],
+      "market_cap_min": 100,
+      "market_cap_max": 100000,
+      "min_dollar_volume": 100000,
+      "exclude_illiquid": true,
+      "exclude_restricted": true,
+      "exclude_halted": true
+    },
+    "scan_config": {
+      "lookback_periods": 20,
+      "structure_strength_threshold": 0.6,
+      "volume_spike_threshold": 1.5,
+      "volume_lookback": 30,
+      "momentum_period": 14,
+      "momentum_threshold": 0.5
+    },
+    "ranking_config": {
+      "intrinsic_weight": 0.20,
+      "technical_weight": 0.30,
+      "timing_weight": 0.25,
+      "magnitude_weight": 0.15,
+      "capital_distress_is_override": true,
+      "shadow_evidence_threshold": 0.0,
+      "missing_data_is_zero": true
+    },
+    "capital_config": {
+      "max_single_position_pct": 0.15,
+      "max_sector_exposure_pct": 0.35,
+      "max_gross_exposure_pct": 0.95,
+      "min_cash_reserve_pct": 0.05,
+      "sizing_method": "equal_weight",
+      "use_limit_orders": true,
+      "limit_price_buffer_bps": 20
+    },
+    "risk_config": {
+      "max_single_position_loss_pct": 0.05,
+      "max_daily_portfolio_loss_pct": 0.03,
+      "max_drawdown_pct": 0.10,
+      "max_correlation_bucket_exposure": 0.40,
+      "min_position_liquidity_usd": 50000,
+      "max_participation_rate": 0.10,
+      "require_protective_stop": true,
+      "stop_loss_distance_pct": 0.08
+    },
+    "governance_config": {
+      "enforce_restricted_list": true,
+      "restricted_symbols": [],
+      "enforce_blackout_periods": true,
+      "enforce_information_barriers": true,
+      "require_valid_exchange": true,
+      "approved_exchanges": ["NASDAQ", "NYSE"]
+    },
+    "paper_submission": {
+      "broker_host": "127.0.0.1",
+      "broker_port": 7497,
+      "broker_client_id": 71,
+      "default_order_type": "LIMIT",
+      "default_time_in_force": "DAY",
+      "outside_rth": false,
+      "default_exchange": "SMART",
+      "default_currency": "USD"
+    },
+    "evidence_ledger": {
+      "record_all_decisions": true,
+      "record_shadow_research": true,
+      "ledger_path": "./evidence/committee_ledger.jsonl",
+      "archive_path": "./evidence/archive/",
+      "compress_archived_records": true
+    },
+    "approval": {
+      "approval_expires_minutes": 120,
+      "approval_scope": "PAPER_ONLY",
+      "require_human_approval": true,
+      "require_risk_approval": true,
+      "require_governance_approval": true
+    },
+    "session": {
+      "state_directory": "./committee_state",
+      "checkpoint_after_each_stage": true,
+      "prevent_duplicate_submission": true,
+      "archive_completed_sessions": true,
+      "archive_path": "./committee_state/archive"
+    },
+    "reporting": {
+      "generate_morning_report": true,
+      "morning_report_path": "./reports/morning_report",
+      "morning_report_format": "both",
+      "generate_reconciliation_report": true,
+      "reconciliation_report_path": "./reports/reconciliation_report",
+      "log_level": "INFO",
+      "log_path": "./logs/committee.log",
+      "maintain_audit_trail": true,
+      "audit_path": "./audit/committee_audit.jsonl"
+    },
+    "safety": {
+      "max_market_data_age_minutes": 60,
+      "max_portfolio_snapshot_age_minutes": 30,
+      "require_paper_account_prefix": true,
+      "reject_live_accounts": true,
+      "validate_approval_hash": true,
+      "enforce_approval_expiration": true,
+      "enforce_approval_scope": true,
+      "require_all_approvals_for_transmit": true,
+      "transmit_incompatible_with_dry_run": true,
+      "require_order_limit_prices": true,
+      "calculate_conservative_limits": true
+    },
+    "features": {
+      "shadow_research_enabled": true,
+      "shadow_research_influence": 0.0,
+      "dry_run_enabled": true,
+      "walk_forward_validation": false,
+      "ml_tuning_enabled": false
+    }
+  }
+}
