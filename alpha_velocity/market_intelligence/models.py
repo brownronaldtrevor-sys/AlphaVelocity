@@ -131,12 +131,13 @@ class MarketScanResult:
     warehouse_manifest_hash: str = ""
     dataset_manifest_hash: str = ""
     configuration_hash: str = ""
+    marketplace_result: Any = None  # MarketplaceResult (optional, avoid circular import)
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     schema_version: str = "1.0.0"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return {
+        result_dict = {
             "scan_run_id": self.scan_run_id,
             "observation_time": self.observation_time.isoformat(),
             "universe_snapshot_id": self.universe_snapshot_id,
@@ -154,6 +155,9 @@ class MarketScanResult:
             "generated_at": self.generated_at.isoformat(),
             "schema_version": self.schema_version,
         }
+        if self.marketplace_result:
+            result_dict["marketplace"] = self.marketplace_result.to_dict()
+        return result_dict
 
     def to_json(self) -> str:
         """Deterministic JSON serialization."""
