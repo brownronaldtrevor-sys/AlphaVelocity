@@ -42,3 +42,11 @@ Price structure, support/resistance location, failures, gaps, compression/expans
 relative volume, and accumulation/distribution features are now recorded in research reports.
 They default to **zero blending weight** and cannot affect rankings unless the out-of-sample
 validation pipeline writes an approved artifact. See `PRICE_ACTION_VALIDATION_STANDARD.md`.
+
+## Milestone 3 — Leakage-Controlled Feature Store
+
+A point-in-time feature-store and validation-dataset generator are now available in
+`alpha_velocity.validation.feature_store`. It emits chronologically ordered feature rows keyed
+by symbol, observation date, and availability timestamp, builds labels for forward returns and
+excursions, enforces purge/embargo-aware splits, writes dataset manifests, and supports
+feature-group ablation. No training logic or execution/risk changes were introduced.
