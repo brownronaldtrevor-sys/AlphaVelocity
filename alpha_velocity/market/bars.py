@@ -9,3 +9,5 @@ class Bar:
     low: float
     close: float
     volume: float
+    symbol: str = "ABC"
+
