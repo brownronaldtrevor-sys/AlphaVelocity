@@ -24,3 +24,5 @@ Thumbs.db
 *.bundle
 *.zip
 setup_windows.log
+
+*.egg-info/
