@@ -11,11 +11,26 @@ from alpha_velocity.opportunity import Opportunity
 from .models import (
     DiscoveryLens,
     DiscoveryLensType,
+    ExecutionHorizonStatus,
+    ExpectedMoveTimeProfile,
+    FutureOutlookSummary,
+    GroundedEvidence,
+    InflectionDimensionAssessment,
+    InflectionDimensionType,
+    InflectionDirection,
+    InflectionProfile,
+    InflectionStage,
+    InflectionSynchronizationProfile,
     LiquidityTier,
     MarketplaceQueue,
     HorizonAssessment,
+    MomentumProfile,
+    MomentumState,
+    MultiHorizonProfile,
     OpportunityCandidateClassification,
+    PatternProfile,
     StructuredThesis,
+    ValidationStatus,
 )
 
 
@@ -92,6 +107,32 @@ class MarketplaceClassifier:
             pattern_family=pattern_family,
         )
 
+        multi_horizon_profile = MultiHorizonProfile(
+            research_horizon=research_horizon,
+            primary_repricing_horizon=primary_horizon,
+            tactical_swing_horizon=tactical_horizon,
+            execution_horizon=execution_horizon,
+        )
+        inflection_profile = self._build_inflection_profile(opportunity, observation_time)
+        synchronization_profile = self._build_synchronization_profile(inflection_profile)
+        momentum_profile = self._build_momentum_profile(opportunity)
+        pattern_profile = self._build_pattern_profile(opportunity, pattern_family, pattern_provenance)
+        future_outlook_summary = self._build_future_outlook_summary(opportunity)
+        expected_move_time_profiles = self._build_expected_move_time_profiles(opportunity)
+        grounded_evidence = self._build_grounded_evidence(opportunity, observation_time)
+        known, unknown, most_sensitive_assumption, what_would_change_my_mind = self._build_epistemic_summary(
+            opportunity=opportunity,
+            inflection_profile=inflection_profile,
+        )
+        ranking_shadow_signals = self._build_ranking_shadow_signals(
+            opportunity=opportunity,
+            research_horizon=research_horizon,
+            primary_horizon=primary_horizon,
+            tactical_horizon=tactical_horizon,
+            execution_horizon=execution_horizon,
+            synchronization_profile=synchronization_profile,
+        )
+
         # Top Five eligibility
         top_five_eligible = is_actionable or research_qualified or any(
             q in queues
@@ -126,6 +167,20 @@ class MarketplaceClassifier:
             primary_repricing_horizon=primary_horizon,
             tactical_swing_horizon=tactical_horizon,
             execution_horizon=execution_horizon,
+            multi_horizon_profile=multi_horizon_profile,
+            inflection_profile=inflection_profile,
+            synchronization_profile=synchronization_profile,
+            momentum_profile=momentum_profile,
+            pattern_profile=pattern_profile,
+            future_outlook_summary=future_outlook_summary,
+            expected_move_time_profiles=expected_move_time_profiles,
+            grounded_evidence=grounded_evidence,
+            known=known,
+            unknown=unknown,
+            most_sensitive_assumption=most_sensitive_assumption,
+            what_would_change_my_mind=what_would_change_my_mind,
+            ranking_shadow_signals=ranking_shadow_signals,
+            ranking_shadow_influence_enabled=False,
         )
 
     def _identify_lenses(self, opportunity: Opportunity) -> tuple[DiscoveryLens, ...]:
@@ -498,10 +553,10 @@ class MarketplaceClassifier:
 
         primary_horizon = HorizonAssessment(
             horizon_name="PRIMARY_REPRICING_HORIZON",
-            status="POSSIBLE" if opportunity.expected_upside_pct is not None else "UNCONFIRMED",
+            status="BUILDING" if opportunity.expected_upside_pct is not None else "UNCONFIRMED",
             attractiveness=min(100.0, abs(opportunity.expected_upside_pct or 0.0) + research_confidence * 0.3),
             confidence=min(1.0, (research_confidence / 100.0) + (0.15 if opportunity.expected_upside_pct is not None else 0.0)),
-            expected_realization_window=f"{int(opportunity.expected_holding_days or 20)} trading days",
+            expected_realization_window="3-18 months",
             supporting_evidence=supporting,
             contradictory_evidence=contradictions,
             required_confirmation=required_confirmation,
@@ -522,9 +577,10 @@ class MarketplaceClassifier:
             calibration_status=str(opportunity.calibration_status),
         )
 
+        execution_status = self._derive_execution_horizon_status(opportunity, is_actionable)
         execution_horizon = HorizonAssessment(
             horizon_name="EXECUTION_HORIZON",
-            status="READY" if is_actionable else ("AWAITING_CONFIRMATION" if opportunity.trigger_state.upper() == "WAITING_FOR_TRIGGER" else "RESEARCH_ONLY"),
+            status=execution_status.value,
             attractiveness=100.0 if is_actionable else (75.0 if opportunity.trigger_state.upper() == "TRIGGERED" else 25.0),
             confidence=1.0 if is_actionable else 0.4,
             expected_realization_window="1-10 trading days",
@@ -536,6 +592,335 @@ class MarketplaceClassifier:
         )
 
         return research_horizon, primary_horizon, tactical_horizon, execution_horizon
+
+    def _derive_execution_horizon_status(self, opportunity: Opportunity, is_actionable: bool) -> ExecutionHorizonStatus:
+        trigger_state = str(opportunity.trigger_state).upper()
+        if not opportunity.risk_eligible or not opportunity.governance_eligible:
+            return ExecutionHorizonStatus.WAIT
+        if opportunity.failed_breakout or opportunity.failed_breakdown:
+            return ExecutionHorizonStatus.FAILED
+        if opportunity.current_position_weight > 0.0 and trigger_state != "TRIGGERED":
+            return ExecutionHorizonStatus.EXIT_REVIEW
+        if is_actionable:
+            if opportunity.breakout_distance_pct >= 4.0:
+                return ExecutionHorizonStatus.EXTENDED
+            if opportunity.calibration_status.upper() == "CALIBRATED":
+                return ExecutionHorizonStatus.ACTIONABLE
+            return ExecutionHorizonStatus.SCALE_ELIGIBLE
+        if trigger_state == "TRIGGERED":
+            return ExecutionHorizonStatus.STARTER_ELIGIBLE
+        if trigger_state == "WAITING_FOR_TRIGGER":
+            return ExecutionHorizonStatus.WATCH
+        return ExecutionHorizonStatus.WAIT
+
+    def _build_inflection_profile(self, opportunity: Opportunity, observation_time: datetime) -> InflectionProfile:
+        dimensions: list[InflectionDimensionAssessment] = []
+        improving = InflectionDirection.IMPROVING
+        flat = InflectionDirection.FLAT
+        deteriorating = InflectionDirection.DETERIORATING
+        trigger_state = str(opportunity.trigger_state).upper()
+
+        technical_stage = InflectionStage.CONFIRMED if trigger_state == "TRIGGERED" else InflectionStage.BUILDING
+        if opportunity.failed_breakout or opportunity.failed_breakdown:
+            technical_stage = InflectionStage.ROLLING_OVER
+
+        fundamentals_stage = InflectionStage.BUILDING if (opportunity.expected_upside_pct or 0.0) >= 12.0 else InflectionStage.PRE_INFLECTION
+        if not opportunity.risk_eligible:
+            fundamentals_stage = InflectionStage.DETERIORATING
+
+        recognition_stage = InflectionStage.EARLY_INFLECTION if trigger_state == "WAITING_FOR_TRIGGER" else InflectionStage.CONFIRMED
+        if opportunity.breakout_distance_pct >= 5.0:
+            recognition_stage = InflectionStage.EXTENDED
+
+        dimensions.append(self._dimension(InflectionDimensionType.FUNDAMENTAL, fundamentals_stage, improving if fundamentals_stage != InflectionStage.DETERIORATING else deteriorating, opportunity, observation_time, "Scenario-driven upside with survivability checks"))
+        dimensions.append(self._dimension(InflectionDimensionType.EARNINGS_AND_MARGIN, InflectionStage.BUILDING, improving if opportunity.expected_upside_pct is not None else flat, opportunity, observation_time, "Normalized earnings outlook inferred from expected upside"))
+        dimensions.append(self._dimension(InflectionDimensionType.CAPITAL_STRUCTURE, InflectionStage.BUILDING if opportunity.risk_eligible else InflectionStage.DETERIORATING, improving if opportunity.risk_eligible else deteriorating, opportunity, observation_time, "Risk eligibility and liquidity constraints"))
+        dimensions.append(self._dimension(InflectionDimensionType.INDUSTRY, InflectionStage.EARLY_INFLECTION if str(opportunity.sector_regime).upper() in {"EARLY_LEADERSHIP", "EMERGING_INFLECTION"} else InflectionStage.UNKNOWN, improving if str(opportunity.sector_regime).upper() in {"EARLY_LEADERSHIP", "ESTABLISHED_LEADER", "EMERGING_INFLECTION"} else flat, opportunity, observation_time, "Sector and industry regime alignment"))
+        dimensions.append(self._dimension(InflectionDimensionType.PEER, InflectionStage.BUILDING if opportunity.weekly_relative_strength >= 1.0 else InflectionStage.PRE_INFLECTION, improving if opportunity.weekly_relative_strength >= 1.0 else flat, opportunity, observation_time, "Relative strength versus peer proxy"))
+        dimensions.append(self._dimension(InflectionDimensionType.MACRO, InflectionStage.UNKNOWN, flat, opportunity, observation_time, "Macro state remains unmodeled in sample workflows"))
+        dimensions.append(self._dimension(InflectionDimensionType.MANAGEMENT_EXPECTATIONS, InflectionStage.BUILDING if opportunity.known_catalysts else InflectionStage.UNKNOWN, improving if opportunity.known_catalysts else flat, opportunity, observation_time, "Catalyst and guidance proxy"))
+        dimensions.append(self._dimension(InflectionDimensionType.ESTIMATE_REVISIONS, InflectionStage.BUILDING if opportunity.calibration_status.upper() == "CALIBRATED" else InflectionStage.PRE_INFLECTION, improving if opportunity.calibration_status.upper() == "CALIBRATED" else flat, opportunity, observation_time, "Calibration and probability availability"))
+        dimensions.append(self._dimension(InflectionDimensionType.MARKET_RECOGNITION, recognition_stage, improving if trigger_state in {"TRIGGERED", "WAITING_FOR_TRIGGER"} else flat, opportunity, observation_time, "Trigger-state recognition tracking"))
+        dimensions.append(self._dimension(InflectionDimensionType.TECHNICAL, technical_stage, improving if technical_stage in {InflectionStage.BUILDING, InflectionStage.CONFIRMED} else deteriorating, opportunity, observation_time, "Pattern and volume confirmation"))
+        dimensions.append(self._dimension(InflectionDimensionType.CATALYST, InflectionStage.BUILDING if opportunity.known_catalysts else InflectionStage.UNKNOWN, improving if opportunity.known_catalysts else flat, opportunity, observation_time, "Known catalyst schedule"))
+        dimensions.append(self._dimension(InflectionDimensionType.POSITION_LIFECYCLE, InflectionStage.EXTENDED if opportunity.current_position_weight > 0.0 and opportunity.breakout_distance_pct >= 4.0 else InflectionStage.EARLY_INFLECTION, improving if opportunity.current_position_weight == 0.0 else flat, opportunity, observation_time, "Position lifecycle and extension risk"))
+
+        before_within_after = {
+            "RESEARCH_HORIZON": "WITHIN" if fundamentals_stage in {InflectionStage.BUILDING, InflectionStage.CONFIRMED} else "BEFORE",
+            "PRIMARY_REPRICING_HORIZON": "WITHIN" if recognition_stage in {InflectionStage.EARLY_INFLECTION, InflectionStage.BUILDING, InflectionStage.CONFIRMED} else "AFTER",
+            "TACTICAL_SWING_HORIZON": "WITHIN" if technical_stage in {InflectionStage.EARLY_INFLECTION, InflectionStage.BUILDING, InflectionStage.CONFIRMED} else "AFTER",
+            "EXECUTION_HORIZON": "WITHIN" if trigger_state == "TRIGGERED" else "BEFORE",
+        }
+        return InflectionProfile(dimensions=tuple(dimensions), before_within_after_by_horizon=before_within_after)
+
+    def _dimension(
+        self,
+        dimension_type: InflectionDimensionType,
+        stage: InflectionStage,
+        direction: InflectionDirection,
+        opportunity: Opportunity,
+        observation_time: datetime,
+        summary: str,
+    ) -> InflectionDimensionAssessment:
+        contradictory = tuple(opportunity.warnings[:1])
+        required_confirmation = (
+            "Volume confirmation above trigger",
+            "No governance or risk rejection",
+        )
+        invalidation = f"Close below {opportunity.primary_invalidation_price:.2f}" if opportunity.primary_invalidation_price else "Loss of structural support"
+        velocity = max(-1.0, min(1.0, (opportunity.relative_volume - 1.0)))
+        confidence = min(1.0, max(0.0, (opportunity.weekly_structure_quality + opportunity.daily_structure_quality) / 2.0))
+        return InflectionDimensionAssessment(
+            dimension=dimension_type,
+            stage=stage,
+            direction=direction,
+            velocity=velocity,
+            confidence=confidence,
+            evidence=(summary,),
+            contradictory_evidence=contradictory,
+            available_at=observation_time,
+            required_confirmation=required_confirmation,
+            invalidation=invalidation,
+            calibration_status=opportunity.calibration_status,
+        )
+
+    def _build_synchronization_profile(self, inflection_profile: InflectionProfile) -> InflectionSynchronizationProfile:
+        improving = [d for d in inflection_profile.dimensions if d.direction == InflectionDirection.IMPROVING]
+        deteriorating = [d for d in inflection_profile.dimensions if d.direction == InflectionDirection.DETERIORATING]
+        contradictions = tuple(
+            f"{d.dimension.value}: {d.contradictory_evidence[0]}"
+            for d in inflection_profile.dimensions
+            if d.contradictory_evidence
+        )
+        agreement_strength = 0.0
+        if inflection_profile.dimensions:
+            agreement_strength = len(improving) / len(inflection_profile.dimensions)
+        recognition_gap = 0.0
+        fundamentals = next((d for d in inflection_profile.dimensions if d.dimension == InflectionDimensionType.FUNDAMENTAL), None)
+        market_recognition = next((d for d in inflection_profile.dimensions if d.dimension == InflectionDimensionType.MARKET_RECOGNITION), None)
+        if fundamentals and market_recognition:
+            stage_delta = max(0.0, float(fundamentals.stage.value != market_recognition.stage.value))
+            recognition_gap = min(1.0, stage_delta + max(0.0, fundamentals.confidence - market_recognition.confidence))
+        lead_lag = (
+            "FUNDAMENTAL_LEADS_MARKET_RECOGNITION"
+            if recognition_gap >= 0.25
+            else "TECHNICAL_AND_RECOGNITION_SYNCHRONIZED"
+        )
+        timing_opportunity = "EARLY" if recognition_gap >= 0.25 else ("ALIGNED" if agreement_strength >= 0.5 else "MIXED")
+        contributors = {
+            "improving_ratio": agreement_strength,
+            "recognition_gap": recognition_gap,
+            "deterioration_ratio": (len(deteriorating) / max(1, len(inflection_profile.dimensions))),
+        }
+        return InflectionSynchronizationProfile(
+            improving_dimensions=len(improving),
+            deteriorating_dimensions=len(deteriorating),
+            agreement_strength=agreement_strength,
+            contradictions=contradictions,
+            lead_lag_relationships=(lead_lag,),
+            recognition_gap=recognition_gap,
+            timing_opportunity=timing_opportunity,
+            contributors=contributors,
+        )
+
+    def _build_momentum_profile(self, opportunity: Opportunity) -> MomentumProfile:
+        long_term_trend = str(opportunity.weekly_trend_state).upper()
+        medium_term_trend = str(opportunity.daily_trend_state).upper()
+        short_term_trend = "UP" if opportunity.breakout_distance_pct > 0.0 else "FLAT"
+        trend_direction = "UP" if long_term_trend == "UPTREND" or medium_term_trend == "UPTREND" else "MIXED"
+        trend_velocity = max(-1.0, min(1.0, (opportunity.relative_volume - 1.0) * 0.75))
+        trend_persistence = min(1.0, max(0.0, (opportunity.weekly_structure_quality + opportunity.daily_structure_quality) / 2.0))
+
+        momentum_state = MomentumState.UNKNOWN
+        if opportunity.failed_breakout or opportunity.failed_breakdown:
+            momentum_state = MomentumState.FAILED
+        elif opportunity.breakout_distance_pct >= 5.0:
+            momentum_state = MomentumState.EXTENDED
+        elif opportunity.relative_volume >= 1.5:
+            momentum_state = MomentumState.CONFIRMED_MOMENTUM
+        elif opportunity.relative_volume >= 1.1:
+            momentum_state = MomentumState.EARLY_MOMENTUM
+        elif opportunity.relative_volume < 0.9:
+            momentum_state = MomentumState.EXHAUSTING
+        else:
+            momentum_state = MomentumState.MATURE_MOMENTUM
+
+        return MomentumProfile(
+            long_term_trend=long_term_trend,
+            medium_term_trend=medium_term_trend,
+            short_term_trend=short_term_trend,
+            trend_direction=trend_direction,
+            trend_velocity=trend_velocity,
+            trend_persistence=trend_persistence,
+            trend_maturity=momentum_state,
+            relative_strength_vs_market=opportunity.weekly_relative_strength,
+            relative_strength_vs_sector=opportunity.daily_relative_strength,
+            relative_strength_vs_peers=(opportunity.weekly_relative_strength + opportunity.daily_relative_strength) / 2.0,
+            relative_volume=opportunity.relative_volume,
+            liquidity_adjusted_momentum=max(0.0, opportunity.relative_volume * min(1.0, opportunity.average_daily_dollar_volume / 5_000_000.0)),
+            volatility_state=str(opportunity.daily_volatility_state),
+            acceleration=max(0.0, opportunity.volatility_expansion),
+            deceleration=max(0.0, opportunity.volatility_contraction),
+        )
+
+    def _build_pattern_profile(
+        self,
+        opportunity: Opportunity,
+        pattern_family: str,
+        pattern_provenance: dict[str, float],
+    ) -> PatternProfile:
+        support = max(0.0, opportunity.close_price * (1.0 - (opportunity.distance_to_support_pct / 100.0)))
+        resistance = max(0.0, opportunity.close_price * (1.0 + (opportunity.distance_to_resistance_pct / 100.0)))
+        depth = abs(opportunity.distance_to_support_pct)
+        duration_days = 20 if "base" in pattern_family else 10
+        quality_warnings: list[str] = []
+        if opportunity.relative_volume < 1.0:
+            quality_warnings.append("relative_volume_below_confirmed_threshold")
+        if opportunity.breakout_distance_pct >= 5.0:
+            quality_warnings.append("extension_risk")
+        if opportunity.failed_breakout:
+            quality_warnings.append("failed_breakout_risk")
+        return PatternProfile(
+            pattern_name=pattern_family,
+            calculation_window=f"{duration_days}_trading_days",
+            pivot_or_trigger=opportunity.daily_breakout_level,
+            support=support,
+            resistance=resistance,
+            depth=depth,
+            duration_days=duration_days,
+            volume_behavior="EXPANDING" if opportunity.relative_volume >= 1.1 else "NEUTRAL",
+            volatility_behavior="CONTRACTION" if opportunity.volatility_contraction >= opportunity.volatility_expansion else "EXPANSION",
+            distance_to_trigger=abs(opportunity.breakout_distance_pct),
+            extension=max(0.0, opportunity.breakout_distance_pct),
+            invalidation=f"Close below {opportunity.primary_invalidation_price:.2f}" if opportunity.primary_invalidation_price else "Loss of setup support",
+            quality_warnings=tuple(quality_warnings),
+            provenance=pattern_provenance,
+        )
+
+    def _build_future_outlook_summary(self, opportunity: Opportunity) -> FutureOutlookSummary:
+        verified_facts = (
+            f"trigger_state={opportunity.trigger_state}",
+            f"weekly_trend_state={opportunity.weekly_trend_state}",
+            f"daily_trend_state={opportunity.daily_trend_state}",
+        )
+        company_guidance = tuple(
+            str(catalyst.get("name", "guidance_item"))
+            for catalyst in opportunity.known_catalysts
+            if isinstance(catalyst, dict)
+        )
+        third_party_estimates = ()
+        alpha_velocity_scenarios = (
+            f"expected_upside_pct={self._format_optional_pct(opportunity.expected_upside_pct)}",
+            f"expected_downside_pct={self._format_optional_pct(opportunity.expected_downside_pct)}",
+        )
+        human_hypotheses = ()
+        model_inference = (
+            "momentum_state_inferred_from_relative_volume",
+            "inflection_stage_inferred_from_trigger_and_regime",
+        )
+        unknowns = (
+            "consensus_estimate_feed_unavailable" if opportunity.probability_estimate is None else "",
+            "peer_revision_dataset_unavailable",
+        )
+        clean_unknowns = tuple(item for item in unknowns if item)
+        return FutureOutlookSummary(
+            verified_facts=verified_facts,
+            company_guidance=company_guidance,
+            third_party_estimates=third_party_estimates,
+            alpha_velocity_scenarios=alpha_velocity_scenarios,
+            human_hypotheses=human_hypotheses,
+            model_inference=model_inference,
+            unknowns=clean_unknowns,
+        )
+
+    def _build_expected_move_time_profiles(self, opportunity: Opportunity) -> tuple[ExpectedMoveTimeProfile, ...]:
+        upside = self._format_optional_pct(opportunity.expected_upside_pct)
+        downside = self._format_optional_pct(opportunity.expected_downside_pct)
+        confidence = min(1.0, max(0.0, 1.0 - opportunity.uncertainty_score))
+        profiles = (
+            ExpectedMoveTimeProfile(
+                horizon_name="PRIMARY_REPRICING_HORIZON",
+                expected_move_range=upside,
+                expected_realization_window="3-18 months",
+                confidence=confidence,
+                downside_range=downside,
+                liquidity=opportunity.average_daily_dollar_volume,
+                transaction_cost_estimate_bps=float(opportunity.estimated_cost_bps or 0.0),
+                opportunity_cost_considerations=("cash_competes_as_default_candidate",),
+                evidence_quality=ValidationStatus.SUPPORTED if opportunity.expected_upside_pct is not None else ValidationStatus.UNKNOWN,
+            ),
+            ExpectedMoveTimeProfile(
+                horizon_name="TACTICAL_SWING_HORIZON",
+                expected_move_range=upside,
+                expected_realization_window="5-60 trading days",
+                confidence=min(1.0, max(0.0, opportunity.relative_volume / 2.0)),
+                downside_range=downside,
+                liquidity=opportunity.average_daily_dollar_volume,
+                transaction_cost_estimate_bps=float(opportunity.estimated_cost_bps or 0.0),
+                opportunity_cost_considerations=("extension_risk_monitoring_required",),
+                evidence_quality=ValidationStatus.SUPPORTED,
+            ),
+        )
+        return profiles
+
+    def _build_grounded_evidence(self, opportunity: Opportunity, observation_time: datetime) -> tuple[GroundedEvidence, ...]:
+        lineage = tuple(opportunity.source_record_ids or ())
+        source_id = opportunity.dataset_manifest_hash or opportunity.warehouse_manifest_hash or "unknown-dataset"
+        return (
+            GroundedEvidence(
+                source="SAMPLE_DATA" if "sample" in source_id.lower() else "WAREHOUSE",
+                document_or_dataset_id=source_id,
+                observation_time=observation_time,
+                available_at=opportunity.event_data_available_at,
+                evidence_type="opportunity_features",
+                confidence=min(1.0, max(0.0, 1.0 - opportunity.uncertainty_score)),
+                validation_status=ValidationStatus.SUPPORTED,
+                lineage=lineage,
+            ),
+        )
+
+    def _build_epistemic_summary(
+        self,
+        *,
+        opportunity: Opportunity,
+        inflection_profile: InflectionProfile,
+    ) -> tuple[tuple[str, ...], tuple[str, ...], str, str]:
+        known = (
+            f"trigger_state={opportunity.trigger_state}",
+            f"relative_volume={opportunity.relative_volume:.2f}",
+            f"sector_regime={opportunity.sector_regime}",
+        )
+        unknown = (
+            "consensus_forward_estimates_missing" if opportunity.probability_estimate is None else "",
+            "peer_margin_revision_history_missing",
+            "macro_regime_mapping_partial",
+        )
+        unknown_clean = tuple(item for item in unknown if item)
+        most_sensitive_assumption = "Recognition lag closes before technical setup expires"
+        what_would_change_my_mind = "Technical trigger fails while inflection dimensions move to ROLLING_OVER or DETERIORATING"
+        return known, unknown_clean, most_sensitive_assumption, what_would_change_my_mind
+
+    def _build_ranking_shadow_signals(
+        self,
+        *,
+        opportunity: Opportunity,
+        research_horizon: HorizonAssessment,
+        primary_horizon: HorizonAssessment,
+        tactical_horizon: HorizonAssessment,
+        execution_horizon: HorizonAssessment,
+        synchronization_profile: InflectionSynchronizationProfile,
+    ) -> dict[str, float]:
+        return {
+            "long_term_asymmetric_value": research_horizon.attractiveness,
+            "primary_repricing_attractiveness": primary_horizon.attractiveness,
+            "tactical_swing_attractiveness": tactical_horizon.attractiveness,
+            "execution_readiness": execution_horizon.attractiveness,
+            "inflection_synchronization": synchronization_profile.agreement_strength * 100.0,
+            "recognition_gap": synchronization_profile.recognition_gap * 100.0,
+            "research_confidence": max(0.0, min(100.0, 100.0 - (opportunity.uncertainty_score * 100.0))),
+            "liquidity": min(100.0, opportunity.average_daily_dollar_volume / 100_000.0),
+            "survivability": 100.0 if opportunity.risk_eligible else 20.0,
+        }
 
     @staticmethod
     def _format_optional_pct(value: float | None) -> str:

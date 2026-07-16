@@ -245,6 +245,28 @@ Final Rank = (0.30 × Intrinsic) + (0.30 × Timing) + (0.40 × Swing Value)
 
 **Status**: ✅ Single engine, deterministic, frozen
 
+### Opportunity Marketplace Intelligence Extension (v1)
+
+The marketplace classifier now attaches explainability-first intelligence fields to each candidate classification without replacing queue logic, top-five mechanics, or committee boundaries.
+
+Added classification metadata includes:
+- Multi-horizon profile (research, primary repricing, tactical swing, execution)
+- Independent inflection dimension assessments and before/within/after horizon mapping
+- Inflection synchronization profile (agreement, contradiction, lead-lag, recognition gap)
+- Momentum profile (trend maturity, persistence, velocity, relative-strength context)
+- Pattern profile (trigger/support/resistance/depth/duration with provenance)
+- Future outlook summary (facts, guidance, estimates, scenarios, inference, unknowns)
+- Expected move/time profiles per horizon
+- Grounded evidence records with validation status and lineage
+- Epistemic dossier fields (known, unknown, sensitive assumption, change-my-mind condition)
+- Ranking shadow signals (attached by default, influence disabled)
+
+Architecture guarantees preserved:
+- No duplicate ranking engines introduced
+- No bypass of existing marketplace queue assignment
+- No autonomous execution path introduced
+- No default change to opportunity ranking influence
+
 ---
 
 ### 5. Capital Intelligence Optimizer

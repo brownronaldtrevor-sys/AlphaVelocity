@@ -270,6 +270,34 @@ class TestMarketplaceClassifier:
 
         assert 0 <= classification.research_confidence <= 100
 
+    def test_classifier_populates_intelligence_profiles(self, mock_opportunity: Opportunity):
+        """Test classifier populates v1 discovery intelligence structures."""
+        classifier = MarketplaceClassifier()
+        classification = classifier.classify(mock_opportunity)
+
+        assert classification.multi_horizon_profile is not None
+        assert classification.inflection_profile is not None
+        assert classification.synchronization_profile is not None
+        assert classification.momentum_profile is not None
+        assert classification.pattern_profile is not None
+        assert classification.future_outlook_summary is not None
+        assert classification.expected_move_time_profiles
+        assert classification.grounded_evidence
+
+        # Ensure independent dimensions are represented for inflection analysis.
+        assert len(classification.inflection_profile.dimensions) >= 10
+        assert "RESEARCH_HORIZON" in classification.inflection_profile.before_within_after_by_horizon
+        assert classification.synchronization_profile.improving_dimensions >= 1
+
+    def test_ranking_shadow_signals_default_to_non_influential(self, mock_opportunity: Opportunity):
+        """Test ranking-shadow metrics are attached but not active by default."""
+        classifier = MarketplaceClassifier()
+        classification = classifier.classify(mock_opportunity)
+
+        assert classification.ranking_shadow_signals
+        assert classification.ranking_shadow_influence_enabled is False
+        assert "long_term_asymmetric_value" in classification.ranking_shadow_signals
+
 
 # ============================================================================
 # Opportunity Marketplace Tests

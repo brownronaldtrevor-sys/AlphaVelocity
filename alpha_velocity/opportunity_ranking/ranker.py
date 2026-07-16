@@ -44,6 +44,9 @@ class OpportunityRanker:
         opportunities: Sequence[Opportunity],
         universe_snapshot_id: str = "UNKNOWN",
         confidence_level: str = "RESEARCH",
+        shadow_signals_by_opportunity: Mapping[str, Mapping[str, float]] | None = None,
+        ranking_shadow_influence_enabled: bool = False,
+        ranking_shadow_weight: float = 0.0,
     ) -> RankingBatch:
         """
         Rank a collection of opportunities.
@@ -67,7 +70,88 @@ class OpportunityRanker:
         # Score each opportunity
         ranking_results = []
         for opp in opportunities:
+            shadow_signals = (
+                dict(shadow_signals_by_opportunity.get(opp.opportunity_id, {}))
+                if shadow_signals_by_opportunity
+                else {}
+            )
             result = self._rank_single_opportunity(opp)
+            shadow_score = self._compute_shadow_score(shadow_signals)
+            if ranking_shadow_influence_enabled and ranking_shadow_weight > 0.0:
+                influence = max(0.0, min(1.0, ranking_shadow_weight))
+                blended_score = (
+                    (1.0 - influence) * result.expected_swing_value_score
+                    + (influence * shadow_score)
+                )
+                result = RankingResult(
+                    opportunity_id=result.opportunity_id,
+                    rank=result.rank,
+                    percentile=result.percentile,
+                    overall_research_score=result.overall_research_score,
+                    ranking_state=result.ranking_state,
+                    intrinsic_opportunity_score=result.intrinsic_opportunity_score,
+                    timing_opportunity_score=result.timing_opportunity_score,
+                    expected_swing_value_score=blended_score,
+                    technical_score=result.technical_score,
+                    catalyst_score=result.catalyst_score,
+                    capital_structure_score=result.capital_structure_score,
+                    liquidity_score=result.liquidity_score,
+                    risk_adjustment=result.risk_adjustment,
+                    uncertainty_adjustment=result.uncertainty_adjustment,
+                    validation_status=result.validation_status,
+                    positive_contributors=result.positive_contributors,
+                    negative_contributors=result.negative_contributors,
+                    warnings=result.warnings,
+                    missing_information=result.missing_information,
+                    required_confirmation=result.required_confirmation,
+                    evidence_lineage={
+                        **result.evidence_lineage,
+                        "shadow": {
+                            "score": shadow_score,
+                            "signals": shadow_signals,
+                            "influence_enabled": True,
+                            "weight": influence,
+                        },
+                    },
+                    shadow_signals=shadow_signals,
+                    shadow_score=shadow_score,
+                    shadow_influence_enabled=True,
+                )
+            else:
+                result = RankingResult(
+                    opportunity_id=result.opportunity_id,
+                    rank=result.rank,
+                    percentile=result.percentile,
+                    overall_research_score=result.overall_research_score,
+                    ranking_state=result.ranking_state,
+                    intrinsic_opportunity_score=result.intrinsic_opportunity_score,
+                    timing_opportunity_score=result.timing_opportunity_score,
+                    expected_swing_value_score=result.expected_swing_value_score,
+                    technical_score=result.technical_score,
+                    catalyst_score=result.catalyst_score,
+                    capital_structure_score=result.capital_structure_score,
+                    liquidity_score=result.liquidity_score,
+                    risk_adjustment=result.risk_adjustment,
+                    uncertainty_adjustment=result.uncertainty_adjustment,
+                    validation_status=result.validation_status,
+                    positive_contributors=result.positive_contributors,
+                    negative_contributors=result.negative_contributors,
+                    warnings=result.warnings,
+                    missing_information=result.missing_information,
+                    required_confirmation=result.required_confirmation,
+                    evidence_lineage={
+                        **result.evidence_lineage,
+                        "shadow": {
+                            "score": shadow_score,
+                            "signals": shadow_signals,
+                            "influence_enabled": False,
+                            "weight": 0.0,
+                        },
+                    },
+                    shadow_signals=shadow_signals,
+                    shadow_score=shadow_score,
+                    shadow_influence_enabled=False,
+                )
             ranking_results.append(result)
 
         # Sort by swing value (descending)
@@ -100,6 +184,9 @@ class OpportunityRanker:
                 missing_information=result.missing_information,
                 required_confirmation=result.required_confirmation,
                 evidence_lineage=result.evidence_lineage,
+                shadow_signals=result.shadow_signals,
+                shadow_score=result.shadow_score,
+                shadow_influence_enabled=result.shadow_influence_enabled,
             )
             ranked_with_position.append(ranked_result)
 
@@ -321,3 +408,12 @@ class OpportunityRanker:
 
         # Default to WATCHLIST for anything else with moderate interest
         return RankingState.WATCHLIST
+
+    def _compute_shadow_score(self, shadow_signals: Mapping[str, float]) -> float:
+        """Compute a normalized 0-100 shadow score from optional signals."""
+        if not shadow_signals:
+            return 0.0
+        values = [max(0.0, min(100.0, float(value))) for value in shadow_signals.values()]
+        if not values:
+            return 0.0
+        return sum(values) / len(values)
