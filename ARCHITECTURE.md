@@ -170,6 +170,17 @@ G. **INDUSTRY_AND_MACRO_CONTEXT**
 
 **Output**: Opportunities with evidence lineage, confidence levels, source documents
 
+### Adaptive Research Universes v1
+
+The scanner supports multiple independent research universes that run in parallel discovery streams and merge to canonical opportunities by security identity.
+
+Adaptive-universe guarantees:
+- One canonical Opportunity model remains authoritative.
+- Independent universe provenance is retained on each merged canonical opportunity.
+- Duplicate evidence across universes does not change ranking weights by default.
+- Universe priorities are research guidance only and never capital authorization.
+- Marketplace, ranking, committee, risk, governance, and human approval boundaries remain unchanged.
+
 **Status**: ✅ Production, frozen
 
 ---

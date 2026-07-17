@@ -17,9 +17,17 @@ from alpha_velocity.warehouse import SQLiteHistoricalWarehouse
 from .models import (
     ExclusionReason,
     MarketScanResult,
+    PriorityMode,
     QualificationState,
+    ResearchPriorityLevel,
+    ResearchPriorityRecommendation,
+    ResearchUniverse,
     ScanConfig,
     SecurityQualification,
+    UniverseDiagnostics,
+    UniverseMembershipRecord,
+    UniverseType,
+    ValidationStatus,
 )
 
 
@@ -54,39 +62,101 @@ class MarketIntelligenceEngine:
         scan_run_id = f"SCAN-{observation_time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
         universe_snapshot_id = f"UNIV-{observation_time.strftime('%Y%m%d-%H%M%S')}"
 
-        # Get point-in-time universe
         universe = warehouse.point_in_time_universe(as_of=observation_time)
+        security_by_id = {security.security_id: security for security in universe}
 
-        qualifications: list[SecurityQualification] = []
-        qualified_opportunities: list[Opportunity] = []
+        qualification_by_security: dict[str, SecurityQualification] = {}
+        opportunity_by_security: dict[str, Opportunity] = {}
+        universe_diagnostics: list[UniverseDiagnostics] = []
+        universe_priorities: list[ResearchPriorityRecommendation] = []
+        candidate_counts_by_universe: dict[str, int] = {}
+        merged_duplicate_candidates = 0
         warnings: list[str] = []
         exclusion_counts: dict[str, int] = {}
+        overlap_tracker: dict[str, set[str]] = {}
 
-        # Qualify each security
-        for security in universe:
-            qualification = self._qualify_security(
-                security=security,
+        security_metrics = {
+            security.security_id: self._compute_security_metrics(
                 warehouse=warehouse,
-                config=scan_config,
-                universe_snapshot_id=universe_snapshot_id,
-                warehouse_manifest_hash=universe_manifest_hash,
-                dataset_manifest_hash=dataset_manifest_hash,
+                security_id=security.security_id,
+                observation_time=observation_time,
             )
-            qualifications.append(qualification)
+            for security in universe
+        }
 
-            # Track exclusions
-            if not qualification.qualified:
-                for exclusion in qualification.exclusions:
-                    exclusion_counts[exclusion.category] = exclusion_counts.get(exclusion.category, 0) + 1
+        research_universes = self._resolve_research_universes(
+            securities=universe,
+            scan_config=scan_config,
+            observation_time=observation_time,
+        )
 
-            # Assemble qualified opportunities
-            if qualification.qualified or (
-                scan_config.include_watchlist and qualification.state == QualificationState.WATCHLIST
-            ):
-                if qualification.state == QualificationState.INSUFFICIENT_HISTORY and scan_config.include_insufficient_history:
-                    continue
+        for research_universe in research_universes:
+            if not research_universe.enabled:
+                continue
 
-                try:
+            try:
+                membership = self._build_point_in_time_membership(
+                    universe=research_universe,
+                    securities=universe,
+                    scan_config=scan_config,
+                    security_metrics=security_metrics,
+                    observation_time=observation_time,
+                )
+                diagnostics = self._empty_universe_diagnostics(research_universe)
+                diagnostics = UniverseDiagnostics(
+                    **{
+                        **diagnostics.__dict__,
+                        "securities_considered": len(membership),
+                    }
+                )
+
+                for member in membership:
+                    security = security_by_id.get(member.security_id)
+                    if security is None:
+                        diagnostics = UniverseDiagnostics(
+                            **{
+                                **diagnostics.__dict__,
+                                "data_unavailable_count": diagnostics.data_unavailable_count + 1,
+                                "warning_count": diagnostics.warning_count + 1,
+                            }
+                        )
+                        continue
+
+                    qualification = self._qualify_security(
+                        security=security,
+                        warehouse=warehouse,
+                        config=scan_config,
+                        universe_snapshot_id=universe_snapshot_id,
+                        warehouse_manifest_hash=universe_manifest_hash,
+                        dataset_manifest_hash=dataset_manifest_hash,
+                    )
+
+                    best_existing = qualification_by_security.get(security.security_id)
+                    if best_existing is None or (not best_existing.qualified and qualification.qualified):
+                        qualification_by_security[security.security_id] = qualification
+
+                    if not qualification.qualified:
+                        diagnostics = UniverseDiagnostics(
+                            **{
+                                **diagnostics.__dict__,
+                                "excluded_count": diagnostics.excluded_count + 1,
+                                "data_unavailable_count": diagnostics.data_unavailable_count
+                                + (1 if qualification.state == QualificationState.DATA_QUALITY_FAILURE else 0),
+                            }
+                        )
+                        for exclusion in qualification.exclusions:
+                            exclusion_counts[exclusion.category] = exclusion_counts.get(exclusion.category, 0) + 1
+                        continue
+
+                    diagnostics = UniverseDiagnostics(
+                        **{
+                            **diagnostics.__dict__,
+                            "securities_usable": diagnostics.securities_usable + 1,
+                            "candidates_discovered": diagnostics.candidates_discovered + 1,
+                            "candidates_qualified": diagnostics.candidates_qualified + 1,
+                        }
+                    )
+
                     opportunity = self._assemble_opportunity(
                         security=security,
                         warehouse=warehouse,
@@ -95,10 +165,81 @@ class MarketIntelligenceEngine:
                         warehouse_manifest_hash=universe_manifest_hash,
                         dataset_manifest_hash=dataset_manifest_hash,
                     )
-                    if opportunity is not None:
-                        qualified_opportunities.append(opportunity)
-                except Exception as e:
-                    warnings.append(f"Failed to assemble opportunity for {security.ticker}: {str(e)}")
+                    if opportunity is None:
+                        diagnostics = UniverseDiagnostics(
+                            **{
+                                **diagnostics.__dict__,
+                                "warning_count": diagnostics.warning_count + 1,
+                            }
+                        )
+                        continue
+
+                    self._attach_universe_provenance(
+                        opportunity=opportunity,
+                        universe=research_universe,
+                        membership=member,
+                        discovery_reason=member.inclusion_reason,
+                    )
+
+                    if security.security_id in opportunity_by_security:
+                        self._merge_universe_provenance(
+                            target=opportunity_by_security[security.security_id],
+                            incoming=opportunity,
+                        )
+                        merged_duplicate_candidates += 1
+                        diagnostics = UniverseDiagnostics(
+                            **{
+                                **diagnostics.__dict__,
+                                "duplicate_candidates_merged": diagnostics.duplicate_candidates_merged + 1,
+                            }
+                        )
+                    else:
+                        opportunity_by_security[security.security_id] = opportunity
+
+                    overlap_tracker.setdefault(security.security_id, set()).add(research_universe.universe_id)
+
+                    actionable, starter, near_trigger = self._classify_actionability(opportunity)
+                    diagnostics = UniverseDiagnostics(
+                        **{
+                            **diagnostics.__dict__,
+                            "actionable_count": diagnostics.actionable_count + (1 if actionable else 0),
+                            "starter_count": diagnostics.starter_count + (1 if starter else 0),
+                            "near_trigger_count": diagnostics.near_trigger_count + (1 if near_trigger else 0),
+                            "research_only_count": diagnostics.research_only_count + (0 if (actionable or starter or near_trigger) else 1),
+                            "early_inflection_count": diagnostics.early_inflection_count
+                            + (1 if self._is_early_inflection(opportunity) else 0),
+                            "primary_move_count": diagnostics.primary_move_count
+                            + (1 if self._is_primary_move(opportunity) else 0),
+                        }
+                    )
+
+                diagnostics = self._finalize_universe_diagnostics(diagnostics, opportunity_by_security)
+                priority = self._recommend_research_priority(diagnostics, research_universe)
+                universe_diagnostics.append(diagnostics)
+                universe_priorities.append(priority)
+                candidate_counts_by_universe[research_universe.universe_id] = diagnostics.candidates_discovered
+            except Exception as exc:
+                warnings.append(f"Universe {research_universe.universe_id} failed: {exc}")
+                universe_diagnostics.append(
+                    UniverseDiagnostics(
+                        universe_id=research_universe.universe_id,
+                        universe_name=research_universe.name,
+                        universe_type=research_universe.universe_type,
+                        warning_count=1,
+                    )
+                )
+                universe_priorities.append(
+                    ResearchPriorityRecommendation(
+                        universe_id=research_universe.universe_id,
+                        priority=ResearchPriorityLevel.PAUSED,
+                        reasons=("Universe scan failed",),
+                        contradictions=("Scan execution error",),
+                        confidence=0.0,
+                        validation_status=ValidationStatus.UNKNOWN,
+                    )
+                )
+
+        qualified_opportunities = list(opportunity_by_security.values())
 
         # Rank qualified opportunities
         ranked_results = tuple()
@@ -120,15 +261,25 @@ class MarketIntelligenceEngine:
                 marketplace_result = self.marketplace.organize(
                     opportunities=list(qualified_opportunities),
                     observation_time=observation_time,
+                    universe_metadata={
+                        "candidate_counts_by_universe": candidate_counts_by_universe,
+                        "overlap_across_universes": sum(1 for universes in overlap_tracker.values() if len(universes) > 1),
+                        "merged_canonical_candidate_count": len(qualified_opportunities),
+                        "research_priority_summary": {
+                            recommendation.universe_id: recommendation.priority.value
+                            for recommendation in universe_priorities
+                        },
+                    },
                 )
                 warnings.extend(marketplace_result.warnings)
             except Exception as e:
                 warnings.append(f"Marketplace organization failed: {str(e)}")
 
-        # Create scan result
+        qualifications = tuple(sorted(qualification_by_security.values(), key=lambda q: q.symbol))
+
         qualified_count = sum(1 for q in qualifications if q.qualified)
         watchlist_count = sum(1 for q in qualifications if q.state == QualificationState.WATCHLIST)
-        excluded_count = len(qualifications) - qualified_count - watchlist_count
+        excluded_count = max(0, len(universe) - qualified_count - watchlist_count)
 
         config_hash = self._compute_config_hash(scan_config)
 
@@ -143,15 +294,372 @@ class MarketIntelligenceEngine:
             exclusion_counts_by_reason=exclusion_counts,
             assembled_opportunities=tuple(qualified_opportunities),
             ranked_research_results=ranked_results,
-            security_qualifications=tuple(qualifications),
+            security_qualifications=qualifications,
             warnings=tuple(warnings),
             warehouse_manifest_hash=universe_manifest_hash,
             dataset_manifest_hash=dataset_manifest_hash,
             configuration_hash=config_hash,
             marketplace_result=marketplace_result,
+            universe_diagnostics=tuple(universe_diagnostics),
+            universe_priorities=tuple(universe_priorities),
+            candidate_counts_by_universe=candidate_counts_by_universe,
+            overlap_across_universes=sum(1 for universes in overlap_tracker.values() if len(universes) > 1),
+            merged_duplicate_candidates=merged_duplicate_candidates,
+            unique_canonical_opportunities=len(qualified_opportunities),
         )
 
         return result
+
+    def _resolve_research_universes(
+        self,
+        *,
+        securities: list[Any],
+        scan_config: ScanConfig,
+        observation_time: datetime,
+    ) -> tuple[ResearchUniverse, ...]:
+        if scan_config.research_universes:
+            return tuple(universe for universe in scan_config.research_universes if universe.enabled)
+
+        is_sample_mode = any(str(getattr(security, "source", "")).upper() == "SAMPLE_DATA" for security in securities)
+        if is_sample_mode:
+            return self._build_sample_research_universes(observation_time, scan_config)
+
+        return (
+            ResearchUniverse(
+                universe_id="broad_market",
+                name="Broad Market",
+                description="Default broad market universe",
+                universe_type=UniverseType.BROAD_MARKET,
+                observation_time=observation_time,
+                available_at=observation_time,
+                source="SYSTEM",
+                validation_status=ValidationStatus.SUPPORTED,
+                enabled=True,
+                priority_mode=PriorityMode.BALANCED,
+                capacity_limit=0,
+            ),
+        )
+
+    def _build_sample_research_universes(
+        self,
+        observation_time: datetime,
+        scan_config: ScanConfig,
+    ) -> tuple[ResearchUniverse, ...]:
+        shared = {
+            "observation_time": observation_time,
+            "available_at": observation_time,
+            "source": "SAMPLE_DATA",
+            "validation_status": ValidationStatus.SUPPORTED,
+            "enabled": True,
+            "priority_mode": PriorityMode.BALANCED,
+            "capacity_limit": 0,
+        }
+        return (
+            ResearchUniverse(universe_id="micro_cap", name="Micro Cap", description="Smallest cap proxy bucket", universe_type=UniverseType.MICRO_CAP, membership_rules={"market_cap_proxy_max": 2.5e7}, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="small_cap", name="Small Cap", description="Small cap proxy bucket", universe_type=UniverseType.SMALL_CAP, membership_rules={"market_cap_proxy_min": 2.5e7, "market_cap_proxy_max": 1.0e8}, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="mid_cap", name="Mid Cap", description="Mid cap proxy bucket", universe_type=UniverseType.MID_CAP, membership_rules={"market_cap_proxy_min": 1.0e8, "market_cap_proxy_max": 4.0e8}, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="large_cap", name="Large Cap", description="Large cap proxy bucket", universe_type=UniverseType.LARGE_CAP, membership_rules={"market_cap_proxy_min": 4.0e8}, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="broad_market", name="Broad Market", description="Broad coverage universe", universe_type=UniverseType.BROAD_MARKET, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="special_situation", name="Special Situations", description="Complex and contradictory setups", universe_type=UniverseType.SPECIAL_SITUATION, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="turnaround", name="Turnaround", description="Recovery and restructuring candidates", universe_type=UniverseType.TURNAROUND, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="event_driven", name="Event Driven", description="Catalyst and event-oriented names", universe_type=UniverseType.EVENT_DRIVEN, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="momentum", name="Momentum", description="Relative strength and trend persistence", universe_type=UniverseType.MOMENTUM, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="deep_value", name="Deep Value", description="Discounted and mean-reversion candidates", universe_type=UniverseType.DEEP_VALUE, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="high_volatility", name="High Volatility", description="High-volatility opportunities", universe_type=UniverseType.HIGH_VOLATILITY, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="current_holdings", name="Current Holdings", description="Existing holdings universe", universe_type=UniverseType.CURRENT_HOLDINGS, membership_rules={"symbols": list(scan_config.current_holding_symbols or ("HOLD1", "HOLD2", "AAPL"))}, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="user_watchlist", name="User Watchlist", description="User-defined watchlist symbols", universe_type=UniverseType.USER_WATCHLIST, membership_rules={"symbols": list(scan_config.user_watchlist_symbols or ("WATCH1", "WATCH2", "WEAK"))}, tags=("SAMPLE_DATA",), **shared),
+            ResearchUniverse(universe_id="etf_benchmark", name="ETF Benchmark", description="Benchmark ETF and proxy names", universe_type=UniverseType.ETF_BENCHMARK, membership_rules={"symbols": list(scan_config.benchmark_symbols or ("SPY", "QQQ", "IWM", "DIA"))}, tags=("SAMPLE_DATA",), **shared),
+        )
+
+    def _build_point_in_time_membership(
+        self,
+        *,
+        universe: ResearchUniverse,
+        securities: list[Any],
+        scan_config: ScanConfig,
+        security_metrics: dict[str, dict[str, float]],
+        observation_time: datetime,
+    ) -> tuple[UniverseMembershipRecord, ...]:
+        members: list[UniverseMembershipRecord] = []
+        include_symbols = {symbol.upper() for symbol in universe.membership_rules.get("symbols", [])}
+        for security in securities:
+            security_id = str(getattr(security, "security_id", "") or "")
+            symbol = str(getattr(security, "ticker", "") or "")
+            if not security_id or not symbol:
+                continue
+
+            available_at = getattr(security, "available_at", observation_time)
+            if available_at and available_at > observation_time:
+                continue
+
+            listing_date = getattr(security, "listing_date", observation_time)
+            delisting_date = getattr(security, "delisting_date", None)
+            if listing_date and listing_date > observation_time:
+                continue
+            if delisting_date and delisting_date < observation_time:
+                continue
+
+            metrics = security_metrics.get(security_id, {})
+            include = self._security_in_universe(
+                universe=universe,
+                symbol=symbol,
+                security=security,
+                metrics=metrics,
+                include_symbols=include_symbols,
+            )
+            if not include:
+                continue
+
+            members.append(
+                UniverseMembershipRecord(
+                    security_id=security_id,
+                    symbol=symbol,
+                    effective_from=listing_date or observation_time,
+                    effective_to=delisting_date,
+                    inclusion_reason=self._membership_reason(universe, symbol),
+                    source=str(getattr(security, "source", "")) or universe.source,
+                    available_at=available_at if available_at else observation_time,
+                    validation_status=ValidationStatus.SUPPORTED,
+                )
+            )
+
+        return tuple(sorted(members, key=lambda item: item.symbol))
+
+    def _security_in_universe(
+        self,
+        *,
+        universe: ResearchUniverse,
+        symbol: str,
+        security: Any,
+        metrics: dict[str, float],
+        include_symbols: set[str],
+    ) -> bool:
+        symbol_u = symbol.upper()
+        market_cap_proxy = float(metrics.get("market_cap_proxy", 0.0))
+        avg_dollar_volume = float(metrics.get("avg_dollar_volume", 0.0))
+        volatility = float(metrics.get("volatility", 0.0))
+        latest_close = float(metrics.get("latest_close", 0.0))
+
+        if universe.universe_type == UniverseType.BROAD_MARKET:
+            return True
+        if universe.universe_type == UniverseType.MICRO_CAP:
+            return market_cap_proxy <= float(universe.membership_rules.get("market_cap_proxy_max", 2.5e7))
+        if universe.universe_type == UniverseType.SMALL_CAP:
+            return (
+                market_cap_proxy >= float(universe.membership_rules.get("market_cap_proxy_min", 2.5e7))
+                and market_cap_proxy <= float(universe.membership_rules.get("market_cap_proxy_max", 1.0e8))
+            )
+        if universe.universe_type == UniverseType.MID_CAP:
+            return (
+                market_cap_proxy >= float(universe.membership_rules.get("market_cap_proxy_min", 1.0e8))
+                and market_cap_proxy <= float(universe.membership_rules.get("market_cap_proxy_max", 4.0e8))
+            )
+        if universe.universe_type == UniverseType.LARGE_CAP:
+            return market_cap_proxy >= float(universe.membership_rules.get("market_cap_proxy_min", 4.0e8))
+        if universe.universe_type == UniverseType.SPECIAL_SITUATION:
+            return symbol_u.startswith(("SPEC", "EXC", "EVT"))
+        if universe.universe_type == UniverseType.ACTIVIST:
+            return symbol_u.startswith(("ACT", "EVT"))
+        if universe.universe_type == UniverseType.TURNAROUND:
+            return symbol_u.startswith(("TURN", "TRN", "FIX")) or symbol_u in {"TURN"}
+        if universe.universe_type == UniverseType.HIGH_VOLATILITY:
+            return volatility >= 0.03
+        if universe.universe_type == UniverseType.DEEP_VALUE:
+            return latest_close > 0 and latest_close < 120.0 and avg_dollar_volume >= 500_000.0
+        if universe.universe_type == UniverseType.MOMENTUM:
+            return metrics.get("momentum", 0.0) > 0.0
+        if universe.universe_type == UniverseType.EVENT_DRIVEN:
+            return symbol_u.startswith(("EVT", "TURN", "SPEC"))
+        if universe.universe_type == UniverseType.CURRENT_HOLDINGS:
+            return symbol_u in include_symbols
+        if universe.universe_type == UniverseType.USER_WATCHLIST:
+            return symbol_u in include_symbols
+        if universe.universe_type == UniverseType.ETF_BENCHMARK:
+            return symbol_u in include_symbols
+        if universe.universe_type == UniverseType.CUSTOM:
+            excludes = {item.upper() for item in universe.membership_rules.get("exclude_symbols", [])}
+            includes = {item.upper() for item in universe.membership_rules.get("include_symbols", [])}
+            if includes and symbol_u not in includes:
+                return False
+            if symbol_u in excludes:
+                return False
+            return True
+        return False
+
+    @staticmethod
+    def _membership_reason(universe: ResearchUniverse, symbol: str) -> str:
+        return f"{symbol} matched {universe.universe_type.value} universe rules"
+
+    @staticmethod
+    def _classify_actionability(opportunity: Opportunity) -> tuple[bool, bool, bool]:
+        trigger_state = str(opportunity.trigger_state).upper()
+        weekly_trend = str(opportunity.weekly_trend_state).upper()
+        actionable = (
+            trigger_state == "TRIGGERED"
+            and str(opportunity.calibration_status).upper() == "CALIBRATED"
+            and opportunity.risk_eligible
+            and opportunity.governance_eligible
+            and not opportunity.model_disagreement
+        )
+        starter = (
+            trigger_state == "TRIGGERED"
+            and opportunity.risk_eligible
+            and opportunity.governance_eligible
+            and not opportunity.model_disagreement
+            and not actionable
+        )
+        near_trigger = trigger_state == "WAITING_FOR_TRIGGER" and weekly_trend == "UPTREND" and opportunity.breakout_distance_pct <= 5.0
+        return actionable, starter, near_trigger
+
+    @staticmethod
+    def _is_early_inflection(opportunity: Opportunity) -> bool:
+        setup = str(opportunity.setup_type).upper()
+        return "EARLY" in setup or setup in {"CONSTRUCTIVE_PULLBACK", "BASE_ON_BASE"}
+
+    @staticmethod
+    def _is_primary_move(opportunity: Opportunity) -> bool:
+        return str(opportunity.trigger_state).upper() == "TRIGGERED" and str(opportunity.weekly_trend_state).upper() == "UPTREND"
+
+    @staticmethod
+    def _empty_universe_diagnostics(universe: ResearchUniverse) -> UniverseDiagnostics:
+        return UniverseDiagnostics(
+            universe_id=universe.universe_id,
+            universe_name=universe.name,
+            universe_type=universe.universe_type,
+        )
+
+    @staticmethod
+    def _finalize_universe_diagnostics(
+        diagnostics: UniverseDiagnostics,
+        opportunities_by_security: dict[str, Opportunity],
+    ) -> UniverseDiagnostics:
+        if diagnostics.candidates_qualified == 0:
+            return diagnostics
+
+        values = list(opportunities_by_security.values())
+        avg_research_conf = 0.0
+        avg_capital_conviction = 0.0
+        if values:
+            avg_research_conf = sum(1.0 if opportunity.expected_upside_pct is not None else 0.3 for opportunity in values) / len(values)
+            avg_capital_conviction = sum(0.8 if str(opportunity.calibration_status).upper() == "CALIBRATED" else 0.3 for opportunity in values) / len(values)
+
+        return UniverseDiagnostics(
+            **{
+                **diagnostics.__dict__,
+                "average_research_confidence": avg_research_conf,
+                "average_capital_conviction": avg_capital_conviction,
+            }
+        )
+
+    @staticmethod
+    def _recommend_research_priority(
+        diagnostics: UniverseDiagnostics,
+        universe: ResearchUniverse,
+    ) -> ResearchPriorityRecommendation:
+        density = diagnostics.candidates_qualified / max(1, diagnostics.securities_considered)
+        if diagnostics.candidates_qualified == 0:
+            priority = ResearchPriorityLevel.PAUSED
+            reasons = ("No qualified candidates discovered",)
+        elif density >= 0.45 or diagnostics.early_inflection_count >= 4:
+            priority = ResearchPriorityLevel.VERY_HIGH
+            reasons = ("High opportunity density or strong early inflection breadth",)
+        elif density >= 0.30:
+            priority = ResearchPriorityLevel.HIGH
+            reasons = ("Healthy qualified opportunity density",)
+        elif density >= 0.15:
+            priority = ResearchPriorityLevel.NORMAL
+            reasons = ("Moderate opportunity density",)
+        else:
+            priority = ResearchPriorityLevel.LOW
+            reasons = ("Sparse opportunity density",)
+
+        contradictions = ()
+        if diagnostics.warning_count > 0:
+            contradictions = ("Data warnings reduce priority confidence",)
+
+        return ResearchPriorityRecommendation(
+            universe_id=universe.universe_id,
+            priority=priority,
+            reasons=reasons,
+            contradictions=contradictions,
+            missing_information=("Further validation of universe membership quality",),
+            required_confirmation=("Reconfirm priority on next observation",),
+            confidence=max(0.1, min(0.9, 0.3 + density)),
+            validation_status=ValidationStatus.PARTIALLY_SUPPORTED,
+        )
+
+    def _compute_security_metrics(
+        self,
+        *,
+        warehouse: SQLiteHistoricalWarehouse,
+        security_id: str,
+        observation_time: datetime,
+    ) -> dict[str, float]:
+        bars = [bar for bar in warehouse.get_raw_bars(security_id) if bar.available_at <= observation_time]
+        if not bars:
+            return {
+                "latest_close": 0.0,
+                "avg_dollar_volume": 0.0,
+                "market_cap_proxy": 0.0,
+                "volatility": 0.0,
+                "momentum": 0.0,
+            }
+
+        recent = bars[-20:]
+        latest_close = float(recent[-1].close)
+        avg_dollar_volume = sum(float(bar.close) * float(bar.volume) for bar in recent) / max(1, len(recent))
+        returns = []
+        for idx in range(1, len(recent)):
+            prev_close = float(recent[idx - 1].close)
+            current_close = float(recent[idx].close)
+            if prev_close <= 0:
+                continue
+            returns.append((current_close - prev_close) / prev_close)
+        volatility = (sum(abs(value) for value in returns) / max(1, len(returns))) if returns else 0.0
+        momentum = (float(recent[-1].close) - float(recent[0].close)) / max(1e-6, float(recent[0].close))
+        return {
+            "latest_close": latest_close,
+            "avg_dollar_volume": avg_dollar_volume,
+            "market_cap_proxy": avg_dollar_volume * 20.0,
+            "volatility": volatility,
+            "momentum": momentum,
+        }
+
+    @staticmethod
+    def _attach_universe_provenance(
+        *,
+        opportunity: Opportunity,
+        universe: ResearchUniverse,
+        membership: UniverseMembershipRecord,
+        discovery_reason: str,
+    ) -> None:
+        object.__setattr__(opportunity, "contributing_universe_ids", (universe.universe_id,))
+        object.__setattr__(opportunity, "primary_discovery_universe", universe.universe_id)
+        object.__setattr__(opportunity, "universe_membership_evidence", (membership.to_dict(),))
+        object.__setattr__(opportunity, "discovery_reasons_by_universe", {universe.universe_id: (discovery_reason,)})
+        object.__setattr__(opportunity, "universe_priority_context", {universe.universe_id: "NORMAL"})
+
+    @staticmethod
+    def _merge_universe_provenance(
+        *,
+        target: Opportunity,
+        incoming: Opportunity,
+    ) -> None:
+        merged_universe_ids = tuple(sorted(set(target.contributing_universe_ids) | set(incoming.contributing_universe_ids)))
+        merged_membership = tuple(list(target.universe_membership_evidence) + list(incoming.universe_membership_evidence))
+
+        merged_reasons: dict[str, tuple[str, ...]] = {}
+        for source in (target.discovery_reasons_by_universe, incoming.discovery_reasons_by_universe):
+            for key, values in source.items():
+                merged_reasons[key] = tuple(sorted(set(merged_reasons.get(key, ()) + tuple(values))))
+
+        merged_priority_context = dict(target.universe_priority_context)
+        merged_priority_context.update(incoming.universe_priority_context)
+
+        object.__setattr__(target, "contributing_universe_ids", merged_universe_ids)
+        object.__setattr__(target, "universe_membership_evidence", merged_membership)
+        object.__setattr__(target, "discovery_reasons_by_universe", merged_reasons)
+        object.__setattr__(target, "universe_priority_context", merged_priority_context)
 
     def _qualify_security(
         self,
@@ -748,6 +1256,26 @@ class MarketIntelligenceEngine:
             "exclude_delisted": config.universe_config.exclude_delisted,
             "min_bars_for_weekly": config.min_bars_for_weekly,
             "min_completed_weeks": config.min_completed_weeks,
+            "research_universes": [
+                {
+                    "universe_id": universe.universe_id,
+                    "universe_type": universe.universe_type.value,
+                    "enabled": universe.enabled,
+                    "priority_mode": universe.priority_mode.value,
+                    "capacity_limit": universe.capacity_limit,
+                    "minimum_liquidity": universe.minimum_liquidity,
+                    "minimum_data_quality": universe.minimum_data_quality,
+                    "minimum_candidate_count": universe.minimum_candidate_count,
+                    "maximum_candidate_count": universe.maximum_candidate_count,
+                    "membership_rules": universe.membership_rules,
+                    "benchmark_ids": sorted(universe.benchmark_ids),
+                    "tags": sorted(universe.tags),
+                }
+                for universe in sorted(config.research_universes, key=lambda item: item.universe_id)
+            ],
+            "user_watchlist_symbols": sorted(config.user_watchlist_symbols),
+            "current_holding_symbols": sorted(config.current_holding_symbols),
+            "benchmark_symbols": sorted(config.benchmark_symbols),
         }
         config_json = json.dumps(config_dict, sort_keys=True)
         return hashlib.sha256(config_json.encode()).hexdigest()[:16]

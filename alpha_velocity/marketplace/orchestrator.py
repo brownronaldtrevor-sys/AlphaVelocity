@@ -27,6 +27,7 @@ class OpportunityMarketplace:
         self,
         opportunities: list[Opportunity],
         observation_time: datetime | None = None,
+        universe_metadata: dict[str, Any] | None = None,
     ) -> MarketplaceResult:
         """Organize opportunities into marketplace queues.
 
@@ -106,6 +107,10 @@ class OpportunityMarketplace:
             excluded_count=excluded_count,
             discovered_count=discovered_count,
             queue_counts=queue_counts,
+            candidate_counts_by_universe=dict((universe_metadata or {}).get("candidate_counts_by_universe") or {}),
+            overlap_across_universes=int((universe_metadata or {}).get("overlap_across_universes") or 0),
+            merged_canonical_candidate_count=int((universe_metadata or {}).get("merged_canonical_candidate_count") or len(classifications)),
+            research_priority_summary=dict((universe_metadata or {}).get("research_priority_summary") or {}),
             candidate_classifications=tuple(classifications),
             committee_review_list=tuple(committee_review_list),
             top_five=tuple(top_five),
