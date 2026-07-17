@@ -23,6 +23,178 @@ class QualificationState(str, Enum):
     EXCLUDED = "EXCLUDED"
 
 
+class UniverseType(str, Enum):
+    MICRO_CAP = "MICRO_CAP"
+    SMALL_CAP = "SMALL_CAP"
+    MID_CAP = "MID_CAP"
+    LARGE_CAP = "LARGE_CAP"
+    BROAD_MARKET = "BROAD_MARKET"
+    SECTOR = "SECTOR"
+    INDUSTRY = "INDUSTRY"
+    SPECIAL_SITUATION = "SPECIAL_SITUATION"
+    ACTIVIST = "ACTIVIST"
+    TURNAROUND = "TURNAROUND"
+    HIGH_VOLATILITY = "HIGH_VOLATILITY"
+    DEEP_VALUE = "DEEP_VALUE"
+    MOMENTUM = "MOMENTUM"
+    EVENT_DRIVEN = "EVENT_DRIVEN"
+    CURRENT_HOLDINGS = "CURRENT_HOLDINGS"
+    USER_WATCHLIST = "USER_WATCHLIST"
+    ETF_BENCHMARK = "ETF_BENCHMARK"
+    CUSTOM = "CUSTOM"
+
+
+class PriorityMode(str, Enum):
+    DENSITY = "DENSITY"
+    BALANCED = "BALANCED"
+    RESEARCH_DEBT = "RESEARCH_DEBT"
+    HOLDINGS_AWARE = "HOLDINGS_AWARE"
+    MANUAL = "MANUAL"
+
+
+class ValidationStatus(str, Enum):
+    VERIFIED = "VERIFIED"
+    SUPPORTED = "SUPPORTED"
+    PARTIALLY_SUPPORTED = "PARTIALLY_SUPPORTED"
+    UNTESTED = "UNTESTED"
+    CONTRADICTED = "CONTRADICTED"
+    UNKNOWN = "UNKNOWN"
+
+
+class ResearchPriorityLevel(str, Enum):
+    VERY_HIGH = "VERY_HIGH"
+    HIGH = "HIGH"
+    NORMAL = "NORMAL"
+    LOW = "LOW"
+    PAUSED = "PAUSED"
+
+
+@dataclass(frozen=True)
+class UniverseMembershipRecord:
+    security_id: str
+    symbol: str
+    effective_from: datetime
+    effective_to: datetime | None
+    inclusion_reason: str
+    exclusion_reason: str = ""
+    source: str = ""
+    available_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    validation_status: ValidationStatus = ValidationStatus.UNKNOWN
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "security_id": self.security_id,
+            "symbol": self.symbol,
+            "effective_from": self.effective_from.isoformat(),
+            "effective_to": self.effective_to.isoformat() if self.effective_to else None,
+            "inclusion_reason": self.inclusion_reason,
+            "exclusion_reason": self.exclusion_reason,
+            "source": self.source,
+            "available_at": self.available_at.isoformat(),
+            "validation_status": self.validation_status.value,
+        }
+
+
+@dataclass(frozen=True)
+class ResearchUniverse:
+    universe_id: str
+    name: str
+    description: str
+    universe_type: UniverseType
+    membership_rules: dict[str, Any] = field(default_factory=dict)
+    benchmark_ids: tuple[str, ...] = ()
+    point_in_time_membership: tuple[UniverseMembershipRecord, ...] = ()
+    observation_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    available_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    source: str = ""
+    validation_status: ValidationStatus = ValidationStatus.UNKNOWN
+    enabled: bool = True
+    priority_mode: PriorityMode = PriorityMode.BALANCED
+    capacity_limit: int = 0
+    minimum_liquidity: float = 0.0
+    minimum_data_quality: float = 0.0
+    minimum_candidate_count: int = 0
+    maximum_candidate_count: int = 0
+    tags: tuple[str, ...] = ()
+    schema_version: str = "1.0.0"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "universe_id": self.universe_id,
+            "name": self.name,
+            "description": self.description,
+            "universe_type": self.universe_type.value,
+            "membership_rules": self.membership_rules,
+            "benchmark_ids": self.benchmark_ids,
+            "point_in_time_membership": [m.to_dict() for m in self.point_in_time_membership],
+            "observation_time": self.observation_time.isoformat(),
+            "available_at": self.available_at.isoformat(),
+            "source": self.source,
+            "validation_status": self.validation_status.value,
+            "enabled": self.enabled,
+            "priority_mode": self.priority_mode.value,
+            "capacity_limit": self.capacity_limit,
+            "minimum_liquidity": self.minimum_liquidity,
+            "minimum_data_quality": self.minimum_data_quality,
+            "minimum_candidate_count": self.minimum_candidate_count,
+            "maximum_candidate_count": self.maximum_candidate_count,
+            "tags": self.tags,
+            "schema_version": self.schema_version,
+        }
+
+
+@dataclass(frozen=True)
+class UniverseDiagnostics:
+    universe_id: str
+    universe_name: str
+    universe_type: UniverseType
+    securities_considered: int = 0
+    securities_usable: int = 0
+    candidates_discovered: int = 0
+    candidates_qualified: int = 0
+    duplicate_candidates_merged: int = 0
+    excluded_count: int = 0
+    data_unavailable_count: int = 0
+    actionable_count: int = 0
+    starter_count: int = 0
+    near_trigger_count: int = 0
+    research_only_count: int = 0
+    average_research_confidence: float = 0.0
+    average_capital_conviction: float = 0.0
+    early_inflection_count: int = 0
+    primary_move_count: int = 0
+    warning_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["universe_type"] = self.universe_type.value
+        return data
+
+
+@dataclass(frozen=True)
+class ResearchPriorityRecommendation:
+    universe_id: str
+    priority: ResearchPriorityLevel
+    reasons: tuple[str, ...] = ()
+    contradictions: tuple[str, ...] = ()
+    missing_information: tuple[str, ...] = ()
+    required_confirmation: tuple[str, ...] = ()
+    confidence: float = 0.0
+    validation_status: ValidationStatus = ValidationStatus.UNKNOWN
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "universe_id": self.universe_id,
+            "priority": self.priority.value,
+            "reasons": self.reasons,
+            "contradictions": self.contradictions,
+            "missing_information": self.missing_information,
+            "required_confirmation": self.required_confirmation,
+            "confidence": self.confidence,
+            "validation_status": self.validation_status.value,
+        }
+
+
 @dataclass(frozen=True)
 class UniverseConfig:
     """Configuration for point-in-time universe construction."""
@@ -53,6 +225,10 @@ class ScanConfig:
     min_completed_weeks: int = 10
     include_watchlist: bool = False
     include_insufficient_history: bool = False
+    research_universes: tuple[ResearchUniverse, ...] = ()
+    user_watchlist_symbols: tuple[str, ...] = ()
+    current_holding_symbols: tuple[str, ...] = ()
+    benchmark_symbols: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate configuration."""
@@ -132,6 +308,12 @@ class MarketScanResult:
     dataset_manifest_hash: str = ""
     configuration_hash: str = ""
     marketplace_result: Any = None  # MarketplaceResult (optional, avoid circular import)
+    universe_diagnostics: tuple[UniverseDiagnostics, ...] = ()
+    universe_priorities: tuple[ResearchPriorityRecommendation, ...] = ()
+    candidate_counts_by_universe: dict[str, int] = field(default_factory=dict)
+    overlap_across_universes: int = 0
+    merged_duplicate_candidates: int = 0
+    unique_canonical_opportunities: int = 0
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     schema_version: str = "1.0.0"
 
@@ -152,6 +334,12 @@ class MarketScanResult:
             "warehouse_manifest_hash": self.warehouse_manifest_hash,
             "dataset_manifest_hash": self.dataset_manifest_hash,
             "configuration_hash": self.configuration_hash,
+            "universe_diagnostics": [diagnostic.to_dict() for diagnostic in self.universe_diagnostics],
+            "universe_priorities": [priority.to_dict() for priority in self.universe_priorities],
+            "candidate_counts_by_universe": self.candidate_counts_by_universe,
+            "overlap_across_universes": self.overlap_across_universes,
+            "merged_duplicate_candidates": self.merged_duplicate_candidates,
+            "unique_canonical_opportunities": self.unique_canonical_opportunities,
             "generated_at": self.generated_at.isoformat(),
             "schema_version": self.schema_version,
         }

@@ -646,6 +646,10 @@ class MarketplaceResult:
     excluded_count: int
     discovered_count: int = 0
     queue_counts: dict[str, int] = field(default_factory=dict)
+    candidate_counts_by_universe: dict[str, int] = field(default_factory=dict)
+    overlap_across_universes: int = 0
+    merged_canonical_candidate_count: int = 0
+    research_priority_summary: dict[str, str] = field(default_factory=dict)
     candidate_classifications: tuple[OpportunityCandidateClassification, ...] = ()
     committee_review_list: tuple[OpportunityCandidateClassification, ...] = ()
     top_five: tuple[OpportunityCandidateClassification, ...] = ()
@@ -664,6 +668,10 @@ class MarketplaceResult:
             "excluded_count": self.excluded_count,
             "discovered_count": self.discovered_count,
             "queue_counts": self.queue_counts,
+            "candidate_counts_by_universe": self.candidate_counts_by_universe,
+            "overlap_across_universes": self.overlap_across_universes,
+            "merged_canonical_candidate_count": self.merged_canonical_candidate_count,
+            "research_priority_summary": self.research_priority_summary,
             "committee_review_list_count": len(self.committee_review_list),
             "top_five_count": len(self.top_five),
             "fallback_research_mode": self.fallback_research_mode,

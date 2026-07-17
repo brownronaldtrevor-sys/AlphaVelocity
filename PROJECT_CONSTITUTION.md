@@ -26,3 +26,8 @@ AlphaVelocity exists to generate research-grade opportunity intelligence that is
 - Existing marketplace queues, top-five behavior, and committee integration are preserved.
 - Opportunity ranking core remains deterministic with unchanged defaults.
 - Shadow adapters may be added, but default behavior must remain baseline-equivalent.
+
+## Adaptive Universes Constraint
+- Adaptive research universe priorities guide research attention only.
+- Universe priority must not be treated as capital allocation or execution authorization.
+- Multiple universes may discover the same security, but only one canonical Opportunity is retained.
