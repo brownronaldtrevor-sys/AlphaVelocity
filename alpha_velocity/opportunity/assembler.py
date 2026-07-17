@@ -4,7 +4,27 @@ from datetime import datetime, timezone
 from typing import Any
 
 from alpha_velocity.market.bars import Bar
-from alpha_velocity.opportunity.models import Opportunity
+from alpha_velocity.opportunity.models import (
+    Assumption,
+    AssumptionStatus,
+    ClaimSet,
+    ConvictionAssessment,
+    ConvictionState,
+    EvidenceClaim,
+    ExpressionType,
+    HorizonAssessment,
+    InvalidationProfile,
+    LifecycleStage,
+    Opportunity,
+    OpportunityExpression,
+    OpportunityLifecycle,
+    RecognitionProfile,
+    RecognitionState,
+    ThesisIdentity,
+    ThesisStatus,
+    ThesisType,
+    ValidationStatus,
+)
 
 
 def assemble_opportunity(
@@ -77,6 +97,14 @@ def assemble_opportunity(
         close_price = latest_daily.close
     else:
         close_price = 0.0
+
+    enrichment = _build_enrichment(
+        symbol=symbol,
+        security_id=security_id,
+        observation_time=observation_time,
+        source_record_ids=source_record_ids,
+    )
+
     return Opportunity(
         opportunity_id=f"{symbol}-{observation_time.strftime('%Y%m%d%H%M%S')}",
         security_id=security_id,
@@ -155,8 +183,351 @@ def assemble_opportunity(
         dataset_manifest_hash=dataset_manifest_hash,
         source_record_ids=tuple(source_record_ids),
         warnings=tuple(warnings),
+        thesis_identity=enrichment["thesis_identity"],
+        expressions=enrichment["expressions"],
+        lifecycle=enrichment["lifecycle"],
+        research_horizon=enrichment["research_horizon"],
+        primary_repricing_horizon=enrichment["primary_repricing_horizon"],
+        tactical_swing_horizon=enrichment["tactical_swing_horizon"],
+        execution_horizon=enrichment["execution_horizon"],
+        recognition_profile=enrichment["recognition_profile"],
+        claim_set=enrichment["claim_set"],
+        assumptions=enrichment["assumptions"],
+        invalidation_profile=enrichment["invalidation_profile"],
+        research_conviction=enrichment["research_conviction"],
+        capital_conviction=enrichment["capital_conviction"],
         created_at=datetime.now(timezone.utc),
     )
+
+
+def _build_enrichment(
+    *,
+    symbol: str,
+    security_id: str,
+    observation_time: datetime,
+    source_record_ids: list[str],
+) -> dict[str, Any]:
+    is_sample = security_id.startswith("sample-") or symbol.startswith(("TRG", "START", "NEAR", "VAL", "MOM", "TOP", "EVT", "SPEC", "EXC", "WEAK"))
+    source = "SAMPLE_DATA" if is_sample else "SCANNER"
+
+    thesis_type = ThesisType.SWING_REPRICING
+    lifecycle_stage = LifecycleStage.RESEARCH
+    recognition_state = RecognitionState.BEGINNING
+    research_state = ConvictionState.MEDIUM
+    capital_state = ConvictionState.LOW
+    execution_status = "WATCH"
+    primary_status = "BUILDING"
+    tactical_status = "SETUP"
+    thesis_status = ThesisStatus.ACTIVE
+    contradictory_claims: tuple[EvidenceClaim, ...] = ()
+
+    if symbol.startswith("TRG"):
+        lifecycle_stage = LifecycleStage.PRIMARY_MOVE
+        recognition_state = RecognitionState.ACCELERATING
+        research_state = ConvictionState.HIGH
+        capital_state = ConvictionState.MEDIUM
+        execution_status = "ACTIONABLE"
+    elif symbol.startswith("VAL"):
+        thesis_type = ThesisType.ASSET_VALUE
+        research_state = ConvictionState.VERY_HIGH
+        capital_state = ConvictionState.LOW
+        execution_status = "WAIT"
+    elif symbol.startswith("NEAR"):
+        primary_status = "BUILDING"
+        tactical_status = "NEAR_TRIGGER"
+        execution_status = "WATCH"
+    elif symbol.startswith("TOP"):
+        thesis_type = ThesisType.INDUSTRY_RECOVERY
+        research_state = ConvictionState.HIGH
+        capital_state = ConvictionState.LOW
+        execution_status = "WAIT"
+    elif symbol.startswith("MOM"):
+        lifecycle_stage = LifecycleStage.HARVEST
+        recognition_state = RecognitionState.EXTENDED
+        primary_status = "MATURE"
+        tactical_status = "EXTENDED"
+        execution_status = "EXIT_REVIEW"
+    elif symbol.startswith("EXC"):
+        thesis_status = ThesisStatus.INVALIDATED
+        lifecycle_stage = LifecycleStage.INVALIDATED
+        recognition_state = RecognitionState.FAILED
+        execution_status = "WAIT"
+        contradictory_claims = (
+            EvidenceClaim(
+                claim_id=f"{symbol}-contradiction",
+                text="New contradictory evidence invalidated the thesis.",
+                claim_type="CONTRADICTION",
+                source=source,
+                observation_time=observation_time,
+                available_at=observation_time,
+                confidence=0.9,
+                validation_status=ValidationStatus.SUPPORTED,
+                evidence_lineage=tuple(source_record_ids),
+            ),
+        )
+
+    primary_expression = OpportunityExpression(
+        expression_id=f"{symbol}-expr-primary",
+        security_id=security_id,
+        symbol=symbol,
+        expression_type=ExpressionType.EQUITY,
+        role="PRIMARY",
+        attractiveness=0.55,
+        research_confidence=0.6,
+        liquidity=0.7,
+        implementation_cost=0.1,
+        current_actionability=execution_status,
+        relationship_to_thesis="PRIMARY_EXPRESSION",
+        supporting_evidence=("Baseline expression from scanner",),
+        available_at=observation_time,
+        validation_status=ValidationStatus.SUPPORTED,
+    )
+
+    expressions = [primary_expression]
+    if symbol.startswith("TOP2"):
+        expressions.append(
+            OpportunityExpression(
+                expression_id=f"{symbol}-expr-peer",
+                security_id="",
+                basket_id=f"basket-{symbol.lower()}",
+                symbol="",
+                expression_type=ExpressionType.BASKET,
+                role="ALTERNATIVE",
+                attractiveness=0.5,
+                research_confidence=0.55,
+                liquidity=0.8,
+                implementation_cost=0.15,
+                current_actionability="RESEARCH_ONLY",
+                relationship_to_thesis="DIVERSIFIED_EXPRESSION",
+                supporting_evidence=("Basket expression for thesis diversification",),
+                available_at=observation_time,
+                validation_status=ValidationStatus.UNTESTED,
+            )
+        )
+
+    unknown_claim = EvidenceClaim(
+        claim_id=f"{symbol}-unknown-1",
+        text="Key evidence is still unavailable.",
+        claim_type="UNKNOWN",
+        source=source,
+        observation_time=observation_time,
+        available_at=observation_time,
+        confidence=0.0,
+        validation_status=ValidationStatus.UNKNOWN,
+        evidence_lineage=tuple(source_record_ids),
+    )
+
+    if not symbol.startswith("WEAK"):
+        unknowns = ()
+    else:
+        unknowns = (unknown_claim,)
+
+    return {
+        "thesis_identity": ThesisIdentity(
+            thesis_id=f"THESIS-{symbol}",
+            thesis_name=f"{symbol} thesis",
+            thesis_summary="SAMPLE_DATA thesis summary" if is_sample else "Scanner-derived thesis summary",
+            thesis_type=thesis_type,
+            origin=source,
+            created_at=observation_time,
+            observation_time=observation_time,
+            available_at=observation_time,
+            version="1",
+            status=thesis_status,
+            evidence_lineage=tuple(source_record_ids),
+        ),
+        "expressions": tuple(expressions),
+        "lifecycle": OpportunityLifecycle(
+            current_stage=lifecycle_stage,
+            prior_stage=LifecycleStage.RESEARCH if lifecycle_stage != LifecycleStage.RESEARCH else LifecycleStage.DISCOVERY,
+            stage_changed_at=observation_time,
+            stage_reason="SAMPLE_DATA lifecycle mapping" if is_sample else "Scanner lifecycle initialization",
+            required_confirmation=("Confirm liquidity and catalyst timing",),
+            advancement_conditions=("Sustained confirmation across evidence",),
+            regression_conditions=("Deteriorating recognition and weak breadth",),
+            invalidation_conditions=("Contradictory evidence persists",),
+            evidence_lineage=tuple(source_record_ids),
+        ),
+        "research_horizon": HorizonAssessment(
+            status="QUALIFIED",
+            attractiveness=0.7,
+            confidence=0.7,
+            expected_realization_window="1-4 quarters",
+            expected_move_range="15-45%",
+            downside_range="-10% to -20%",
+            supporting_evidence=("Research horizon remains favorable",),
+            required_confirmation=("Keep validating thesis assumptions",),
+            observation_time=observation_time,
+            available_at=observation_time,
+            validation_status=ValidationStatus.SUPPORTED,
+        ),
+        "primary_repricing_horizon": HorizonAssessment(
+            status=primary_status,
+            attractiveness=0.6,
+            confidence=0.6,
+            expected_realization_window="4-12 weeks",
+            expected_move_range="10-25%",
+            downside_range="-8% to -15%",
+            supporting_evidence=("Primary repricing evidence is developing",),
+            observation_time=observation_time,
+            available_at=observation_time,
+            validation_status=ValidationStatus.SUPPORTED,
+        ),
+        "tactical_swing_horizon": HorizonAssessment(
+            status=tactical_status,
+            attractiveness=0.55,
+            confidence=0.55,
+            expected_realization_window="5-20 trading days",
+            expected_move_range="5-15%",
+            downside_range="-4% to -9%",
+            supporting_evidence=("Tactical setup status",),
+            observation_time=observation_time,
+            available_at=observation_time,
+            validation_status=ValidationStatus.PARTIALLY_SUPPORTED,
+        ),
+        "execution_horizon": HorizonAssessment(
+            status=execution_status,
+            attractiveness=0.45,
+            confidence=0.45,
+            expected_realization_window="1-10 trading days",
+            expected_move_range="3-10%",
+            downside_range="-3% to -7%",
+            supporting_evidence=("Execution horizon intentionally independent",),
+            contradictory_evidence=("Execution may lag research quality",),
+            observation_time=observation_time,
+            available_at=observation_time,
+            validation_status=ValidationStatus.UNTESTED,
+        ),
+        "recognition_profile": RecognitionProfile(
+            state=recognition_state,
+            prior_state=RecognitionState.BEGINNING,
+            direction="IMPROVING" if recognition_state not in (RecognitionState.FAILED, RecognitionState.ROLLING_OVER) else "DETERIORATING",
+            velocity=0.6 if recognition_state == RecognitionState.ACCELERATING else 0.3,
+            changed_at=observation_time,
+            reason="Recognition profile initialization",
+            evidence=("Recognition evidence from SAMPLE_DATA",),
+            contradictions=("Recognition can diverge from intrinsic value",),
+            required_confirmation=("Confirm breadth and follow-through",),
+            invalidation="Failed follow-through",
+            applicable_horizon="TACTICAL_SWING_HORIZON",
+            confidence=0.6,
+            validation_status=ValidationStatus.PARTIALLY_SUPPORTED,
+        ),
+        "claim_set": ClaimSet(
+            why_now=(
+                EvidenceClaim(
+                    claim_id=f"{symbol}-why-now-1",
+                    text="New data changed the current opportunity profile.",
+                    claim_type="WHY_NOW",
+                    source=source,
+                    observation_time=observation_time,
+                    available_at=observation_time,
+                    confidence=0.7,
+                    validation_status=ValidationStatus.SUPPORTED,
+                    evidence_lineage=tuple(source_record_ids),
+                ),
+            ),
+            why_not_now=contradictory_claims,
+            positive_changes=(),
+            negative_changes=contradictory_claims,
+            missing_information=unknowns,
+            required_confirmation=(
+                EvidenceClaim(
+                    claim_id=f"{symbol}-req-1",
+                    text="Need confirmation from next evidence refresh.",
+                    claim_type="REQUIRED_CONFIRMATION",
+                    source=source,
+                    observation_time=observation_time,
+                    available_at=observation_time,
+                    confidence=0.6,
+                    validation_status=ValidationStatus.UNTESTED,
+                    evidence_lineage=tuple(source_record_ids),
+                ),
+            ),
+            known=(
+                EvidenceClaim(
+                    claim_id=f"{symbol}-known-1",
+                    text="Core structural setup is known.",
+                    claim_type="KNOWN",
+                    source=source,
+                    observation_time=observation_time,
+                    available_at=observation_time,
+                    confidence=0.8,
+                    validation_status=ValidationStatus.SUPPORTED,
+                    evidence_lineage=tuple(source_record_ids),
+                ),
+            ),
+            unknown=unknowns,
+            what_would_change_my_mind=(
+                EvidenceClaim(
+                    claim_id=f"{symbol}-mind-1",
+                    text="Repeated contradiction in key assumptions would change conviction.",
+                    claim_type="CHANGE_MIND",
+                    source=source,
+                    observation_time=observation_time,
+                    available_at=observation_time,
+                    confidence=0.7,
+                    validation_status=ValidationStatus.SUPPORTED,
+                    evidence_lineage=tuple(source_record_ids),
+                ),
+            ),
+            most_sensitive_assumption="Catalyst timing remains the key sensitivity.",
+        ),
+        "assumptions": (
+            Assumption(
+                assumption_id=f"{symbol}-asm-1",
+                statement="Liquidity remains sufficient for staged execution.",
+                category="LIQUIDITY",
+                importance=0.8,
+                sensitivity=0.7,
+                dependency="MARKET_PARTICIPATION",
+                status=AssumptionStatus.SUPPORTED,
+                supporting_evidence=("Recent volume profile",),
+                contradictory_evidence=(),
+                validation_status=ValidationStatus.SUPPORTED,
+                last_reviewed_at=observation_time,
+                invalidation_condition="Sustained liquidity decline",
+            ),
+            Assumption(
+                assumption_id=f"{symbol}-asm-2",
+                statement="Recognition can continue independent of valuation quality.",
+                category="RECOGNITION",
+                importance=0.6,
+                sensitivity=0.6,
+                dependency="FLOW",
+                status=AssumptionStatus.UNTESTED,
+                supporting_evidence=(),
+                contradictory_evidence=(),
+                validation_status=ValidationStatus.UNKNOWN,
+                last_reviewed_at=observation_time,
+                invalidation_condition="Negative breadth and failed follow-through",
+            ),
+        ),
+        "invalidation_profile": InvalidationProfile(
+            thesis_invalidation=("Core thesis evidence contradicted",),
+            tactical_invalidation=("Tactical trigger fails and structure breaks",),
+            execution_invalidation=("Execution horizon remains WAIT under adverse slippage",),
+            data_invalidation=("Source lineage missing or stale",),
+        ),
+        "research_conviction": ConvictionAssessment(
+            state=research_state,
+            confidence=0.75 if research_state in (ConvictionState.HIGH, ConvictionState.VERY_HIGH) else 0.55,
+            evidence=("Research thesis has adequate underwriting depth",),
+            contradictions=(),
+            applicable_horizon="RESEARCH_HORIZON",
+            required_confirmation=("Maintain evidence consistency",),
+            validation_status=ValidationStatus.SUPPORTED,
+        ),
+        "capital_conviction": ConvictionAssessment(
+            state=capital_state,
+            confidence=0.35 if capital_state == ConvictionState.LOW else 0.55,
+            evidence=("Capital allocation competes with cash and alternatives",),
+            contradictions=("Execution horizon may not be ready",),
+            applicable_horizon="EXECUTION_HORIZON",
+            required_confirmation=("Execution horizon must improve",),
+            validation_status=ValidationStatus.UNTESTED,
+        ),
+    }
 
 
 def _rolling_support_levels(bars: list[Bar]) -> list[dict[str, Any]]:

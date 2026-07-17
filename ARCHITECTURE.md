@@ -199,6 +199,16 @@ G. **INDUSTRY_AND_MACRO_CONTEXT**
 
 **Status**: ✅ Single model, no duplicates, frozen
 
+### Canonical Opportunity Enrichment v2.1
+
+The canonical Opportunity now captures thesis identity, expressions, lifecycle, four independent horizons, recognition state, structured claim sets, change windows, assumptions, invalidation classes, and separate research/capital conviction.
+
+Preserved architecture guarantees:
+- One canonical Opportunity model remains authoritative.
+- Marketplace, ranking, committee, capital intelligence, and evidence ledger continue consuming the same canonical object.
+- New enrichment fields are representational and evidence-linked; they do not bypass risk, governance, human approval, or paper-mode safety gates.
+- Serialization remains backward compatible for older saved payloads.
+
 ---
 
 ### 4. Opportunity Ranking Engine

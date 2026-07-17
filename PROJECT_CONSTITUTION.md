@@ -26,3 +26,22 @@ AlphaVelocity exists to generate research-grade opportunity intelligence that is
 - Existing marketplace queues, top-five behavior, and committee integration are preserved.
 - Opportunity ranking core remains deterministic with unchanged defaults.
 - Shadow adapters may be added, but default behavior must remain baseline-equivalent.
+
+## Canonical Opportunity Rule
+- There is exactly one authoritative investment Opportunity model: alpha_velocity/opportunity/models.py -> Opportunity.
+- Similarly named objects in ranking, paper, or transport layers are adapters or DTOs and must not replace canonical Opportunity.
+- Canonical Opportunity enrichment must remain serializable, deterministic, and backward compatible with prior saved states.
+
+## Milestone 2.1 Boundaries
+- No additional marketplace/ranking/committee/capital/evidence subsystem creation.
+- No architecture redesign and no autonomous execution path.
+- Lifecycle, recognition, horizons, expressions, and convictions are representational structures and do not authorize execution.
+
+## Deferred Work
+- Adaptive Research Universes
+- Basket Intelligence
+- Relationship Intelligence
+- Best Expression Engine
+- Research Allocation
+- Intraday strategies
+- Futures expansion
