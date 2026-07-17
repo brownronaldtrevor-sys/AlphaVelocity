@@ -1,4 +1,45 @@
-from .models import Opportunity
+from .models import (
+	Assumption,
+	AssumptionStatus,
+	ClaimSet,
+	ConvictionAssessment,
+	ConvictionState,
+	EvidenceClaim,
+	ExpressionType,
+	HorizonAssessment,
+	InvalidationProfile,
+	LifecycleStage,
+	Opportunity,
+	OpportunityExpression,
+	OpportunityLifecycle,
+	RecognitionProfile,
+	RecognitionState,
+	ThesisIdentity,
+	ThesisStatus,
+	ThesisType,
+	ValidationStatus,
+)
 from .assembler import assemble_opportunity
 
-__all__ = ["Opportunity", "assemble_opportunity"]
+__all__ = [
+	"Assumption",
+	"AssumptionStatus",
+	"ClaimSet",
+	"ConvictionAssessment",
+	"ConvictionState",
+	"EvidenceClaim",
+	"ExpressionType",
+	"HorizonAssessment",
+	"InvalidationProfile",
+	"LifecycleStage",
+	"Opportunity",
+	"OpportunityExpression",
+	"OpportunityLifecycle",
+	"RecognitionProfile",
+	"RecognitionState",
+	"ThesisIdentity",
+	"ThesisStatus",
+	"ThesisType",
+	"ValidationStatus",
+	"assemble_opportunity",
+]
